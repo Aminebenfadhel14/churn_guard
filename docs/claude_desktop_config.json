@@ -1,0 +1,54 @@
+{
+  "coworkUserFilesPath": "C:\\Users\\MSI\\Claude",
+  "mcpServers": {
+    "churnguard": {
+      "command": "C:\\Users\\MSI\\Desktop\\churn_guard\\venv\\Scripts\\python.exe",
+      "args": ["C:\\Users\\MSI\\Desktop\\churn_guard\\mcp\\mcp_server.py"],
+      "cwd": "C:\\Users\\MSI\\Desktop\\churn_guard",
+      "env": {
+        "PYTHONPATH": "C:\\Users\\MSI\\Desktop\\churn_guard",
+        "CHURNGUARD_API_BASE_URL": "http://127.0.0.1:8000",
+        "CHURNGUARD_API_KEY": "change-me-please"
+      }
+    }
+  },
+  "preferences": {
+    "coworkScheduledTasksEnabled": true,
+    "coworkHipaaRestricted": false,
+    "ccdScheduledTasksEnabled": true,
+    "sidebarMode": "task",
+    "bypassPermissionsGateByAccount": {
+      "43e133b9-d1dd-4531-985c-31f1b69337bf": false
+    },
+    "coworkWebSearchEnabled": true,
+    "coworkModelAutoFallbackByAccount": {
+      "43e133b9-d1dd-4531-985c-31f1b69337bf": true
+    },
+    "remoteToolsDeviceName": "desktop-65fh1ho",
+    "epitaxyPrefs": {
+      "starred-local-code-sessions": [],
+      "starred-cowork-spaces": [],
+      "starred-session-groups": [],
+      "dframe-local-slice": {
+        "pinnedOrder": [],
+        "customGroupAssignments": {},
+        "customGroupOrder": {}
+      },
+      "desktop-frame.paneStore.v1": {
+        "state": {
+          "extraPanesByMode": {},
+          "colWeightsByMode": {},
+          "rowSplit": 0.5,
+          "draftNonce": 0
+        },
+        "version": 4
+      },
+      "ccd-sessions-filter": {
+        "state": {
+          "selectedProjects": []
+        },
+        "version": 0
+      }
+    }
+  }
+}
