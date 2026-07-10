@@ -1,5 +1,5 @@
 # ChurnGuard
-
+this pltform 
 **Plateforme universelle de prédiction et d'explication de l'attrition client (churn).**
 
 ChurnGuard ingère un dataset client de n'importe quel secteur, entraîne
