@@ -133,6 +133,9 @@ def _phrase_cadence(niveau: str) -> str:
 
 
 _ORIGINE_ACTIONS = {
+    "rag": "générées par l'IA à partir de tes playbooks de rétention et des facteurs de risque propres à ce client",
+    "regles_secours": "issues du moteur de règles de secours (IA momentanément indisponible)",
+    # Anciens libellés conservés pour compatibilité.
     "ia_experte": "générées par l'analyse experte IA à partir des facteurs de risque propres à ce client",
     "degrade": "issues du message de secours (analyse experte IA momentanément indisponible)",
 }
@@ -156,7 +159,7 @@ def generer_plan_retention(
     identite = _identifier_client(client)
     top_actions = _actions_prioritaires(actions)
     signaux = _signaux_client(client)
-    origine = _ORIGINE_ACTIONS.get(source_recommandations, _ORIGINE_ACTIONS["ia_experte"])
+    origine = _ORIGINE_ACTIONS.get(source_recommandations, _ORIGINE_ACTIONS["rag"])
 
     resume = (
         f"{identite} présente un risque de churn {_libelle_niveau(niveau)} "

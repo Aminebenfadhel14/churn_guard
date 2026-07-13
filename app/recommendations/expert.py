@@ -29,7 +29,12 @@ On te fournit, pour UN client precis :
 - son score et niveau de risque de churn,
 - les facteurs qui expliquent le plus ce risque (analyse SHAP), avec le nom REEL de la colonne du dataset, sa valeur pour ce client, et si elle augmente ou diminue le risque.
 
-Ta mission : proposer 3 a 5 actions de retention CONCRETES et SPECIFIQUES a ce client et a ce type d'activite (deduit des colonnes), comme le ferait un vrai charge de compte : appel cible, geste commercial, ajustement contractuel, accompagnement personnalise, offre adaptee...
+Ta mission : proposer des actions de retention CONCRETES et SPECIFIQUES a ce client et a ce type d'activite (deduit des colonnes), comme le ferait un vrai charge de compte : appel cible, geste commercial, ajustement contractuel, accompagnement personnalise, offre adaptee...
+
+CALIBRE le NOMBRE d'actions selon le niveau de risque, sans surreagir :
+- risque FAIBLE : le client est fidele. Propose UNE seule action legere (simple surveillance ou petit geste de fidelisation), et indique dans son detail qu'aucune action prioritaire n'est necessaire. N'invente pas de plan d'urgence.
+- risque MOYEN : 2 a 3 actions ciblees de prevention.
+- risque ELEVE : 3 a 5 actions, plan complet et prioritaire.
 
 Interdits :
 - Pas de conseil statistique generique du type "augmenter X" ou "diminuer Y".
@@ -118,6 +123,26 @@ def generer_recommandations_expertes(
         "Facteurs de risque (SHAP), du plus important au moins important :\n"
         f"{_formater_facteurs(features)}"
     )
+
+    # RAG : injecte les playbooks de retention pertinents pour ancrer les actions
+    # sur des bonnes pratiques ecrites. Sans corpus, ne change rien.
+    try:
+        from app.copilot import rag
+
+        requete = f"{risk_level} " + " ".join(
+            str(f.get("label", f.get("feature", ""))) + " " + str(f.get("value", ""))
+            for f in features
+        )
+        playbooks = rag.contexte_pour_prompt(requete, k=3)
+        if playbooks:
+            contexte += (
+                "\n\nPlaybooks de retention pertinents (appuie tes actions dessus quand "
+                "c'est adapte, et cite la source .md entre parentheses dans le detail) :\n"
+                + playbooks
+            )
+    except Exception:  # noqa: BLE001 — le RAG ne doit jamais casser la generation
+        pass
+
     messages = [
         {"role": "system", "content": SYSTEME_EXPERT},
         {"role": "user", "content": contexte},

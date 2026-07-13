@@ -381,9 +381,15 @@ export default function CopilotPage() {
                     <CardHeader>
                       <CardTitle className="flex items-center gap-2 text-base">
                         <Bot className="size-4 text-primary" /> Synthèse
-                        <span className="ml-auto rounded-full bg-muted px-2 py-0.5 text-xs font-normal text-muted-foreground">
-                          {res.source_synthese === 'llm' ? 'rédigée par l’IA' : 'mode déterministe'}
-                        </span>
+                        {res.source_synthese === 'llm' ? (
+                          <span className="ml-auto rounded border border-primary/40 bg-primary/10 px-1.5 py-0.5 text-[11px] font-normal text-primary">
+                            RAG · IA + playbooks
+                          </span>
+                        ) : (
+                          <span className="ml-auto rounded border border-warning/40 bg-warning/10 px-1.5 py-0.5 text-[11px] font-normal text-warning">
+                            Moteur de règles (secours)
+                          </span>
+                        )}
                       </CardTitle>
                     </CardHeader>
                     <CardContent>

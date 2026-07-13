@@ -209,6 +209,7 @@ def entrainer_et_selectionner(
     random_state: int = 42,
     modeles: dict[str, Any] | None = None,
     dossier_modeles: Path | None = None,
+    nom_dataset: str | None = None,
 ) -> ResultatEntrainement:
     """Entraîne, compare, sélectionne le meilleur modèle et l'enregistre.
 
@@ -296,6 +297,7 @@ def entrainer_et_selectionner(
         [r.as_dict() for r in resultats], nom_best, classes, raison_selection,
         dossier_modeles=dossier_modeles,
         reference_drift=reference_drift,
+        nom_dataset=nom_dataset,
     )
 
     dossier = dossier_modeles or settings.models_dir

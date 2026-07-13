@@ -16,6 +16,7 @@ import {
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useState } from 'react'
+import { ModelSelector } from '@/components/model-selector'
 import { ThemeToggle } from '@/components/theme-toggle'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
@@ -79,6 +80,7 @@ export function AppHeader() {
         </nav>
 
         <div className="ml-auto flex items-center gap-1.5">
+          <ModelSelector />
           <ThemeToggle />
           <DropdownMenu>
             {/* base-ui : le Trigger rend lui-même un <button> — on le style

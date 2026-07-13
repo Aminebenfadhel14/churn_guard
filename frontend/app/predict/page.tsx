@@ -175,7 +175,7 @@ export default function PredictPage() {
           .slice(0, 3)
           .map((r, i) => `${i + 1}. ${r.action ?? ''}${r.detail ? ' - ' + r.detail : ''}`),
       },
-      source_recommendations: data.source_recommendations ?? 'degrade',
+      source_recommendations: data.source_recommendations ?? 'regles_secours',
     }
   }
 
@@ -421,16 +421,20 @@ Merci de prendre contact rapidement pour éviter la perte de ce client.
                     <span className="flex items-center gap-2">
                       <Lightbulb className="size-4 text-primary" /> Plan de rétention
                     </span>
-                    {conseil?.source_recommendations === 'ia_experte' && (
+                    {conseil?.source_recommendations === 'rag' ? (
                       <span className="rounded border border-primary/40 bg-primary/10 px-1.5 py-0.5 text-[11px] font-normal text-primary">
-                        Analyse experte IA
+                        RAG · IA + playbooks
                       </span>
-                    )}
+                    ) : conseil ? (
+                      <span className="rounded border border-warning/40 bg-warning/10 px-1.5 py-0.5 text-[11px] font-normal text-warning">
+                        Moteur de règles (secours)
+                      </span>
+                    ) : null}
                   </CardTitle>
                   <CardDescription>
-                    {conseil?.source_recommendations === 'ia_experte'
-                      ? "Actions générées sur mesure pour ce dataset à partir des facteurs de risque du client."
-                      : "Actions de secours en attendant que l'analyse experte IA soit disponible."}
+                    {conseil?.source_recommendations === 'rag'
+                      ? "Actions générées par l'IA à partir de tes playbooks de rétention et des facteurs de risque du client."
+                      : "Actions du moteur de règles de secours (l'IA est momentanément indisponible)."}
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-3 text-sm">

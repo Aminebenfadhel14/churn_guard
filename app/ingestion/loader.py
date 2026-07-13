@@ -43,6 +43,19 @@ def detecter_encodage(chemin: Path, taille_echantillon: int = 100_000) -> str:
     return "utf-8"
 
 
+def _nettoyer_colonnes(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalise les noms de colonnes : retire le BOM (﻿) et les espaces parasites.
+
+    Certains fichiers (surtout des CSV exportés sous Windows/Excel) commencent par
+    un BOM UTF-8 (``EF BB BF``) qui se colle au nom de la première colonne :
+    ``Age`` devient ``﻿Age``. Ce caractère invisible casse toute correspondance de
+    colonnes (schéma, prédiction, jointures). On le supprime ici, une fois pour
+    toutes, quel que soit le format d'entrée.
+    """
+    df.columns = [str(c).replace("﻿", "").strip() for c in df.columns]
+    return df
+
+
 def charger_dataset(
     chemin: str | Path,
     *,
@@ -77,13 +90,14 @@ def charger_dataset(
         # sep=None + engine="python" laisse pandas deviner le séparateur.
         sep = separateur if separateur is not None else None
         moteur = "python" if sep is None else "c"
-        return pd.read_csv(chemin, encoding=enc, sep=sep, engine=moteur)
+        df = pd.read_csv(chemin, encoding=enc, sep=sep, engine=moteur)
+        return _nettoyer_colonnes(df)
 
     if suffixe in EXTENSIONS_EXCEL:
-        return pd.read_excel(chemin)
+        return _nettoyer_colonnes(pd.read_excel(chemin))
 
     if suffixe in EXTENSIONS_PARQUET:
-        return pd.read_parquet(chemin)
+        return _nettoyer_colonnes(pd.read_parquet(chemin))
 
     formats = sorted(EXTENSIONS_CSV | EXTENSIONS_EXCEL | EXTENSIONS_PARQUET)
     raise ValueError(
