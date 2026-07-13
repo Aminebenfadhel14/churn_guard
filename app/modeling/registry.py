@@ -1,10 +1,10 @@
-"""Model registry versionné (Couche 3 — Modeling).
+"""Model registry versionne (Couche 3 - Modeling).
 
-Chaque entraînement produit une **version** stockée dans ``models/registry/<version>/``
-avec : le pipeline (``model.joblib``), le schéma du dataset (``schema.json``) et les
-métadonnées (``meta.json``). Un pointeur ``models/active.json`` désigne la version
-active, et des copies « à plat » (``best_model.joblib``, ``schema.json``,
-``model_meta.json``) exposent le modèle actif pour l'API et la prédiction.
+Chaque entrainement produit une version stockee dans models/registry/<version>/
+avec : le pipeline (model.joblib), le schema du dataset (schema.json) et les
+metadonnees (meta.json). Un pointeur models/active.json designe la version
+active, et des copies a plat (best_model.joblib, schema.json, model_meta.json)
+exposent le modele actif pour l'API et la prediction.
 """
 
 from __future__ import annotations
@@ -22,11 +22,10 @@ from app.ingestion.schema_registry import SchemaComplet
 
 
 def _remplacer_atomique(ecrire, chemin: Path) -> None:
-    """Écrit via ``ecrire(tmp)`` dans un fichier temporaire puis le renomme.
+    """Ecrit via ecrire(tmp) dans un fichier temporaire puis le renomme.
 
-    ``os.replace`` est atomique : le fichier final est soit l'ancien complet,
-    soit le nouveau complet — jamais un fichier tronqué (si l'écriture est
-    interrompue, ``chemin`` garde sa version précédente intacte).
+    os.replace est atomique : le fichier final est soit l'ancien complet, soit
+    le nouveau complet, jamais un fichier tronque.
     """
     tmp = chemin.with_name(chemin.name + ".tmp")
     try:
@@ -47,24 +46,9 @@ def enregistrer_modele(
     *,
     dossier_modeles: Path | None = None,
     reference_drift: dict[str, Any] | None = None,
+    nom_dataset: str | None = None,
 ) -> dict[str, Any]:
-    """Enregistre une nouvelle version de modèle et la rend active.
-
-    Args:
-        pipeline: Pipeline entraîné (préprocesseur + modèle).
-        schema: Schéma du dataset ayant servi à l'entraînement.
-        resultats: Liste des métriques par modèle comparé.
-        meilleur_modele: Nom du modèle sélectionné.
-        classes: Valeurs de la cible dans l'ordre encodé (index = classe).
-        raison_selection: Explication lisible du choix du meilleur modèle.
-        dossier_modeles: Racine des modèles (défaut : ``settings.models_dir``).
-        reference_drift: Distribution de référence du dataset d'entraînement
-            (``app.monitoring.drift.construire_reference``), utilisée pour
-            détecter le drift des futurs datasets uploadés. Optionnel.
-
-    Returns:
-        Le dictionnaire de métadonnées de la version enregistrée.
-    """
+    """Enregistre une nouvelle version de modele et la rend active."""
     dossier = dossier_modeles or settings.models_dir
     version = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     dossier_version = dossier / "registry" / version
@@ -80,11 +64,11 @@ def enregistrer_modele(
         "colonnes_features": [c.nom for c in schema.features()],
         "raison_selection": raison_selection,
         "resultats": resultats,
+        "dataset": nom_dataset,
     }
 
     meta_json = json.dumps(meta, indent=2, ensure_ascii=False)
 
-    # 1) Écriture de la version dans le registre (écritures atomiques).
     _remplacer_atomique(lambda t: joblib.dump(pipeline, t), dossier_version / "model.joblib")
     _remplacer_atomique(schema.sauvegarder, dossier_version / "schema.json")
     _remplacer_atomique(
@@ -92,8 +76,6 @@ def enregistrer_modele(
         dossier_version / "meta.json",
     )
 
-    # 2) Exposition du modèle actif (copies à plat, lues par l'API/predict).
-    # Écritures atomiques : jamais de fichier tronqué même si interrompu.
     _remplacer_atomique(lambda t: joblib.dump(pipeline, t), dossier / "best_model.joblib")
     _remplacer_atomique(schema.sauvegarder, dossier / "schema.json")
     _remplacer_atomique(
@@ -101,8 +83,6 @@ def enregistrer_modele(
         dossier / "model_meta.json",
     )
 
-    # 3) Référence de drift (optionnelle) : version + copie active, même schéma
-    # d'écriture atomique que le reste.
     if reference_drift is not None:
         reference_json = json.dumps(reference_drift, indent=2, ensure_ascii=False)
         _remplacer_atomique(
@@ -114,7 +94,6 @@ def enregistrer_modele(
             dossier / "drift_reference.json",
         )
 
-    # active.json en dernier : le pointeur ne bascule qu'une fois tout écrit.
     _remplacer_atomique(
         lambda t: t.write_text(
             json.dumps({"version": version, "date": meta["date"]}, indent=2),
@@ -125,8 +104,51 @@ def enregistrer_modele(
     return meta
 
 
+def activer_version(version: str, dossier_modeles: Path | None = None) -> dict[str, Any]:
+    """Rend active une version deja presente dans le registre, sans re-entrainer.
+
+    Recopie les fichiers de registry/<version>/ vers les copies a plat
+    (best_model.joblib, schema.json, model_meta.json et si present
+    drift_reference.json) puis met a jour active.json, en ecritures atomiques.
+    """
+    dossier = dossier_modeles or settings.models_dir
+    dossier_version = dossier / "registry" / version
+    if not dossier_version.is_dir():
+        raise FileNotFoundError(f"Version introuvable dans le registre : {version}")
+
+    src_model = dossier_version / "model.joblib"
+    src_schema = dossier_version / "schema.json"
+    src_meta = dossier_version / "meta.json"
+    for src in (src_model, src_schema, src_meta):
+        if not src.exists():
+            raise FileNotFoundError(f"Fichier manquant pour la version {version} : {src.name}")
+
+    def _copier(src: Path, dst: Path) -> None:
+        contenu = src.read_bytes()
+        _remplacer_atomique(lambda t: t.write_bytes(contenu), dst)
+
+    _copier(src_model, dossier / "best_model.joblib")
+    _copier(src_schema, dossier / "schema.json")
+    _copier(src_meta, dossier / "model_meta.json")
+
+    src_drift = dossier_version / "drift_reference.json"
+    if src_drift.exists():
+        _copier(src_drift, dossier / "drift_reference.json")
+
+    meta = json.loads(src_meta.read_text(encoding="utf-8"))
+    date = meta.get("date", datetime.now(timezone.utc).isoformat())
+    _remplacer_atomique(
+        lambda t: t.write_text(
+            json.dumps({"version": version, "date": date}, indent=2),
+            encoding="utf-8",
+        ),
+        dossier / "active.json",
+    )
+    return meta
+
+
 def lister_versions(dossier_modeles: Path | None = None) -> list[str]:
-    """Retourne les versions disponibles dans le registre (les plus récentes d'abord)."""
+    """Retourne les versions disponibles dans le registre (recentes d'abord)."""
     dossier = (dossier_modeles or settings.models_dir) / "registry"
     if not dossier.exists():
         return []
@@ -134,7 +156,7 @@ def lister_versions(dossier_modeles: Path | None = None) -> list[str]:
 
 
 def version_active(dossier_modeles: Path | None = None) -> str | None:
-    """Retourne l'identifiant de la version active, ou ``None``."""
+    """Retourne l'identifiant de la version active, ou None."""
     chemin = (dossier_modeles or settings.models_dir) / "active.json"
     if chemin.exists():
         return json.loads(chemin.read_text(encoding="utf-8")).get("version")

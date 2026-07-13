@@ -60,7 +60,7 @@ def _executer(chemin: Path) -> None:
     """Exécute l'entraînement et met à jour l'état (appelé dans un thread)."""
     try:
         df: pd.DataFrame = charger_dataset(chemin)
-        res = entrainer_et_selectionner(df)
+        res = entrainer_et_selectionner(df, nom_dataset=chemin.name)
 
         # Invalide les caches pour que l'API serve immédiatement le nouveau modèle.
         charger_modele.cache_clear()

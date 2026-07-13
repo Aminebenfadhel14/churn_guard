@@ -23,6 +23,18 @@ def llm_disponible() -> bool:
     return bool(settings.llm_api_key)
 
 
+def _payload(messages: list[dict[str, str]], temperature: float) -> dict[str, Any]:
+    """Construit le corps de requete ; effort de raisonnement minimal pour gpt-oss."""
+    corps: dict[str, Any] = {
+        "model": settings.llm_model,
+        "messages": messages,
+        "temperature": temperature,
+    }
+    if "gpt-oss" in settings.llm_model:
+        corps["reasoning_effort"] = "low"
+    return corps
+
+
 def completer(
     messages: list[dict[str, str]],
     *,
@@ -46,11 +58,7 @@ def completer(
                     "Authorization": f"Bearer {settings.llm_api_key}",
                     "Content-Type": "application/json",
                 },
-                json={
-                    "model": settings.llm_model,
-                    "messages": messages,
-                    "temperature": temperature,
-                },
+                json=_payload(messages, temperature),
                 timeout=timeout,
             )
         reponse.raise_for_status()

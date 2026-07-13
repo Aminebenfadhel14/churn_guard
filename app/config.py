@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     # ----- Chemins de travail -----
     data_dir: Path = BASE_DIR / "data"
     models_dir: Path = BASE_DIR / "models"
+    knowledge_dir: Path = BASE_DIR / "knowledge"
 
     # ----- MLflow (suivi des experiences) -----
     mlflow_tracking_uri: str = "file:./mlruns"
@@ -42,7 +43,7 @@ class Settings(BaseSettings):
     # Vide -> le copilot fonctionne en mode degrade (synthese deterministe, sans LLM).
     # Defaut : Groq + Llama 3.3 70B (gratuit, rapide, bon function-calling).
     llm_api_key: str = ""
-    llm_model: str = "llama-3.3-70b-versatile"
+    llm_model: str = "openai/gpt-oss-120b"
     llm_base_url: str = "https://api.groq.com/openai/v1"
 
     # ----- Cache des recommandations IA experte -----

@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import stat
 import time
@@ -150,9 +151,9 @@ def _generer_recommandations(
         recos_ia = None
 
     if recos_ia:
-        resultat = (recos_ia, "ia_experte")
+        resultat = (recos_ia, "rag")
     else:
-        resultat = (recommandations_de_secours(risk_score, risk_level), "degrade")
+        resultat = (recommandations_de_secours(risk_score, risk_level), "regles_secours")
 
     recommandations_cache.enregistrer(cle_cache, *resultat)
     return resultat
@@ -812,7 +813,7 @@ def train(payload: dict[str, Any] = Body(default={})) -> dict[str, Any]:
 
     try:
         df = charger_dataset(chemin)
-        res = entrainer_et_selectionner(df)
+        res = entrainer_et_selectionner(df, nom_dataset=chemin.name)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=400, detail=f"Échec de l'entraînement : {exc}") from exc
 
@@ -821,4 +822,183 @@ def train(payload: dict[str, Any] = Body(default={})) -> dict[str, Any]:
     recommandations_cache.vider()
 
     return formater_resultat_entrainement(res, fichier=chemin.name)
+
+
+# ----- Gestion multi-modeles (selecteur : banque, RH, telecom...) -----
+
+# Libelles lisibles selon la cible du modele (extensible, sinon on retombe sur la cible).
+_LABELS_CIBLE = {
+    "Exited": "Banque - Churn client",
+    "Attrition": "RH - Depart employe",
+    # "Churn" est trop generique (telecom, e-commerce, SaaS...) : on ne le fige
+    # pas ici, le libelle est alors deduit du nom du fichier du dataset.
+}
+
+
+def _libelle_modele(meta: dict[str, Any]) -> str:
+    """Construit un libelle lisible pour un modele a partir de ses metadonnees.
+
+    Ordre de priorite :
+    1. Libelle sectoriel connu (banque / RH / telecom) selon la cible.
+    2. Sinon, nom du fichier du dataset, nettoye (ex. "assurance_clients.csv"
+       -> "Assurance Clients"), avec la cible entre parentheses.
+    3. Sinon, un libelle deduit de la cible ("Prediction Lapse").
+    Ainsi, meme un dataset jamais prevu obtient un nom clair dans le selecteur.
+    """
+    cible = str(meta.get("cible", "") or "").strip()
+    base = _LABELS_CIBLE.get(cible)
+    if base:
+        return base
+
+    fichier = str(meta.get("dataset", "") or "").strip()
+    if fichier:
+        nom = os.path.splitext(fichier)[0].replace("_", " ").replace("-", " ").strip()
+        if nom:
+            joli = nom.title()
+            return f"{joli} ({cible})" if cible else joli
+
+    return f"Prediction {cible}" if cible else "Modele"
+
+
+@router.get("/models", dependencies=[Depends(verifier_cle_api)])
+def list_models() -> dict[str, Any]:
+    """Liste les modeles entraines disponibles dans le registre.
+
+    Chaque entree : version, libelle lisible, cible, algorithme, nb de variables,
+    date, et si c'est le modele actuellement actif. Le frontend s'en sert pour
+    proposer un selecteur de modele (bascule banque / RH sans re-entrainer).
+    """
+    from app.modeling.registry import lister_versions, version_active
+
+    active = version_active()
+    modeles: list[dict[str, Any]] = []
+    for version in lister_versions():
+        meta_path = settings.models_dir / "registry" / version / "meta.json"
+        if not meta_path.exists():
+            continue
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            continue
+        modeles.append(
+            {
+                "version": version,
+                "label": _libelle_modele(meta),
+                "cible": meta.get("cible"),
+                "algorithme": meta.get("meilleur_modele"),
+                "n_features": len(meta.get("colonnes_features", []) or []),
+                "date": meta.get("date"),
+                "actif": version == active,
+            }
+        )
+    return {"active": active, "total": len(modeles), "models": modeles}
+
+
+@router.post("/models/activate", dependencies=[Depends(verifier_cle_api)])
+def activate_model(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Bascule le modele actif vers une version du registre, sans re-entrainer.
+
+    Body : {"version": "<id>"}. Recopie la version choisie en modele actif, puis
+    vide les caches pour que prediction, explication et dashboard basculent
+    immediatement (sans redemarrer l'API).
+    """
+    from app.modeling.registry import activer_version
+
+    version = str(payload.get("version", "") or "").strip()
+    if not version:
+        raise HTTPException(status_code=422, detail="Champ requis manquant : version.")
+
+    try:
+        meta = activer_version(version)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"Echec du changement de modele : {exc}") from exc
+
+    charger_modele.cache_clear()
+    charger_meta.cache_clear()
+    recommandations_cache.vider()
+
+    return {
+        "ok": True,
+        "active": version,
+        "label": _libelle_modele(meta),
+        "cible": meta.get("cible"),
+        "algorithme": meta.get("meilleur_modele"),
+    }
+
+
+# ----- RAG (base de connaissances de retention) -----
+
+@router.get("/rag/status", dependencies=[Depends(verifier_cle_api)])
+def rag_status() -> dict[str, Any]:
+    """Etat du RAG : dossier knowledge/, nombre d'extraits indexes, actif ou non."""
+    from app.copilot import rag
+
+    return rag.statut()
+
+
+@router.post("/rag/reindex", dependencies=[Depends(verifier_cle_api)])
+def rag_reindex() -> dict[str, Any]:
+    """Force la reconstruction de l'index apres ajout/modif de documents."""
+    from app.copilot import rag
+
+    return rag.reindexer()
+
+
+
+
+@router.get("/llm/status")
+def llm_status(test: bool = True) -> dict[str, Any]:
+    """Diagnostic : etat du LLM DANS LE PROCESS EN COURS + appel test reel a Groq.
+
+    Ouvre http://127.0.0.1:8000/llm/status dans le navigateur. Si ``test=true``
+    (defaut), fait un vrai appel minimal au LLM et renvoie le resultat ou
+    l'erreur EXACTE de Groq (utile pour comprendre un fallback silencieux).
+    """
+    import httpx
+    from app.copilot.llm import llm_disponible
+
+    cle = settings.llm_api_key or ""
+    infos: dict[str, Any] = {
+        "llm_disponible": llm_disponible(),
+        "cle_presente": bool(cle),
+        "cle_debut": (cle[:4] + "...") if cle else "(vide)",
+        "modele": settings.llm_model,
+        "base_url": settings.llm_base_url,
+    }
+
+    if test and cle:
+        try:
+            with httpx.Client() as client:
+                r = client.post(
+                    f"{settings.llm_base_url}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {cle}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": settings.llm_model,
+                        "messages": [{"role": "user", "content": "Reponds juste: OK"}],
+                        "temperature": 0.0,
+                    },
+                    timeout=30.0,
+                )
+            infos["test_http_status"] = r.status_code
+            if r.status_code == 200:
+                infos["test_ok"] = True
+                infos["test_reponse"] = r.json()["choices"][0]["message"].get("content", "")[:120]
+            else:
+                infos["test_ok"] = False
+                try:
+                    infos["test_erreur"] = r.json().get("error", {}).get("message", r.text[:400])
+                except Exception:  # noqa: BLE001
+                    infos["test_erreur"] = r.text[:400]
+        except Exception as exc:  # noqa: BLE001
+            infos["test_ok"] = False
+            infos["test_erreur"] = f"{type(exc).__name__}: {exc}"
+
+    return infos
+
+
 # Fin des routes ChurnGuard.
