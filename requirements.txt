@@ -34,6 +34,9 @@ python-dotenv>=1.0,<2.0
 httpx>=0.27,<1.0               # appels HTTP (couche MCP -> API FastAPI)
 pydantic-settings>=2.3,<3.0    # config typée via variables d'environnement
 
+# ----- Authentification (sessions utilisateur du Retention Copilot web) -----
+pyjwt>=2.8,<3.0
+
 # ----- Couche MCP -----
 fastmcp>=2.0,<3.0
 

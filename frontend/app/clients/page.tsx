@@ -28,8 +28,8 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { useAuth } from '@/lib/auth'
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://127.0.0.1:8000'
 const PAGE_SIZE = 20
 
 type RiskFilter = 'all' | 'faible' | 'moyen' | 'eleve'
@@ -61,6 +61,7 @@ function formatVal(v: string | number | boolean | null): string {
 }
 
 export default function ClientsPage() {
+  const { apiFetch } = useAuth()
   const [data, setData] = useState<ClientsResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -72,12 +73,12 @@ export default function ClientsPage() {
 
   const buildUrl = useCallback(
     (limit: number, offset: number) => {
-      const url = new URL(`${API_URL}/clients`)
-      url.searchParams.set('limit', String(limit))
-      url.searchParams.set('offset', String(offset))
-      url.searchParams.set('risk', risk)
-      if (query.trim()) url.searchParams.set('q', query.trim())
-      return url.toString()
+      const params = new URLSearchParams()
+      params.set('limit', String(limit))
+      params.set('offset', String(offset))
+      params.set('risk', risk)
+      if (query.trim()) params.set('q', query.trim())
+      return `/clients?${params.toString()}`
     },
     [risk, query],
   )
@@ -86,7 +87,7 @@ export default function ClientsPage() {
     setLoading(true)
     setError(null)
     try {
-      const rep = await fetch(buildUrl(PAGE_SIZE, (page - 1) * PAGE_SIZE))
+      const rep = await apiFetch(buildUrl(PAGE_SIZE, (page - 1) * PAGE_SIZE))
       if (!rep.ok) {
         const d = await rep.json().catch(() => ({}))
         throw new Error(d.detail ?? `Erreur ${rep.status}`)
@@ -102,6 +103,7 @@ export default function ClientsPage() {
     } finally {
       setLoading(false)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [buildUrl, page])
 
   // Recharge (avec un léger debounce) à chaque changement de filtre/page.
@@ -125,7 +127,7 @@ export default function ClientsPage() {
     if (!data) return
     setExporting(true)
     try {
-      const rep = await fetch(buildUrl(1_000_000, 0))
+      const rep = await apiFetch(buildUrl(1_000_000, 0))
       const d: ClientsResponse = await rep.json()
       const entetes = [data.id_col ?? 'id', ...d.colonnes, 'score_risque']
       const lignes = d.clients.map((c) =>

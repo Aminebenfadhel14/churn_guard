@@ -21,6 +21,7 @@ from typing import Any
 
 from fastapi import APIRouter, Body, File, HTTPException, UploadFile, Depends, Security
 from fastapi.security.api_key import APIKeyHeader
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.api.schema_service import (
     charger_drift_reference,
@@ -28,6 +29,7 @@ from app.api.schema_service import (
     features_publiques,
     valider_entree,
 )
+from app.auth import Utilisateur, authentifier, creer_token, decoder_token, trouver_utilisateur
 from app.config import settings
 from app.ingestion import charger_dataset
 from app.ingestion.schema_registry import construire_schema
@@ -62,6 +64,58 @@ def verifier_cle_api(api_key: str = Security(api_key_header)) -> str:
     return api_key
 
 
+# ----- Sessions utilisateur (frontend web) -----
+# Mécanisme additif à la clé API ci-dessus : les appels programmatiques (MCP,
+# scripts) continuent d'utiliser 'x-api-key'. Les utilisateurs humains se
+# connectent via /auth/login et obtiennent un token JWT.
+bearer_scheme = HTTPBearer(auto_error=False)
+
+
+def utilisateur_courant(
+    identifiants: HTTPAuthorizationCredentials | None = Security(bearer_scheme),
+) -> Utilisateur:
+    """Dépendance FastAPI : résout l'utilisateur à partir du token de session."""
+    username = decoder_token(identifiants.credentials) if identifiants else None
+    if not username:
+        raise HTTPException(status_code=401, detail="Authentification requise.")
+    utilisateur = trouver_utilisateur(username)
+    if utilisateur is None:
+        raise HTTPException(status_code=401, detail="Session invalide.")
+    return utilisateur
+
+
+def verifier_acces(
+    api_key: str = Security(api_key_header),
+    identifiants: HTTPAuthorizationCredentials | None = Security(bearer_scheme),
+) -> None:
+    """Autorise l'accès si une session utilisateur valide (JWT) est fournie,
+    sinon retombe sur la vérification de la clé API existante."""
+    if identifiants and decoder_token(identifiants.credentials):
+        return
+    verifier_cle_api(api_key)
+
+
+@router.post("/auth/login")
+def login(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Authentifie un utilisateur et renvoie un token de session (JWT)."""
+    username = str(payload.get("username", "")).strip()
+    mot_de_passe = str(payload.get("password", ""))
+    utilisateur = authentifier(username, mot_de_passe)
+    if utilisateur is None:
+        raise HTTPException(status_code=401, detail="Identifiants invalides.")
+    return {
+        "access_token": creer_token(utilisateur.username),
+        "token_type": "bearer",
+        "user": utilisateur.public(),
+    }
+
+
+@router.get("/auth/me")
+def me(utilisateur: Utilisateur = Depends(utilisateur_courant)) -> dict[str, str]:
+    """Retourne l'utilisateur courant à partir du token de session (restauration de session)."""
+    return utilisateur.public()
+
+
 @router.get("/schema")
 def get_schema() -> dict[str, Any]:
     """Schéma du modèle actif (utilisé par le frontend pour générer le formulaire)."""
@@ -84,7 +138,7 @@ def get_schema() -> dict[str, Any]:
     }
 
 
-@router.post("/predict", dependencies=[Depends(verifier_cle_api)])
+@router.post("/predict", dependencies=[Depends(verifier_acces)])
 def predict(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     """Prédit à partir d'un payload dynamique (champs = schéma actif)."""
     try:
@@ -99,7 +153,7 @@ def predict(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=f"Erreur de prédiction : {exc}") from exc
 
 
-@router.post("/explain", dependencies=[Depends(verifier_cle_api)])
+@router.post("/explain", dependencies=[Depends(verifier_acces)])
 def explain(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     """Explique une prédiction : contributions SHAP (ou fallback d'ablation).
 
@@ -159,7 +213,7 @@ def _generer_recommandations(
     return resultat
 
 
-@router.post("/recommend", dependencies=[Depends(verifier_cle_api)])
+@router.post("/recommend", dependencies=[Depends(verifier_acces)])
 def recommend(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     """Suggère des actions de rétention (Next Best Actions) priorisées pour un client.
 
@@ -193,7 +247,7 @@ def recommend(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=f"Erreur de recommandation : {exc}") from exc
 
 
-@router.post("/recommend/enriched", dependencies=[Depends(verifier_cle_api)])
+@router.post("/recommend/enriched", dependencies=[Depends(verifier_acces)])
 def recommend_enriched(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     """Recommandations **enrichies** : actions de l'IA experte + plan de
     rétention rédigé par le moteur local de redaction.
@@ -253,7 +307,7 @@ def recommend_enriched(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
         ) from exc
 
 
-@router.post("/copilot", dependencies=[Depends(verifier_cle_api)])
+@router.post("/copilot", dependencies=[Depends(verifier_acces)])
 def copilot(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     """**Retention Copilot** : traite un client de bout en bout.
 
@@ -269,7 +323,7 @@ def copilot(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     return resultat
 
 
-@router.post("/copilot/chat", dependencies=[Depends(verifier_cle_api)])
+@router.post("/copilot/chat", dependencies=[Depends(verifier_acces)])
 def copilot_chat(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     """Assistant conversationnel du copilot : chat en langage naturel + tool-calling.
 
@@ -286,7 +340,7 @@ def copilot_chat(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     return discuter(messages, client=client if isinstance(client, dict) else None)
 
 
-@router.post("/what-if", dependencies=[Depends(verifier_cle_api)])
+@router.post("/what-if", dependencies=[Depends(verifier_acces)])
 def what_if(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     """Simule le score de risque d'un client suite à des modifications de variables.
 
@@ -396,7 +450,7 @@ def _dataset_du_modele_actif() -> Path:
     return csvs[0]
 
 
-@router.get("/clients", dependencies=[Depends(verifier_cle_api)])
+@router.get("/clients", dependencies=[Depends(verifier_acces)])
 def get_clients(
     limit: int = 20,
     offset: int = 0,
@@ -495,7 +549,7 @@ def get_clients(
         ) from exc
 
 
-@router.get("/dashboard", dependencies=[Depends(verifier_cle_api)])
+@router.get("/dashboard", dependencies=[Depends(verifier_acces)])
 def get_dashboard() -> dict[str, Any]:
     """Agrégats du tableau de bord, calculés sur le dataset actif scoré.
 
@@ -584,7 +638,7 @@ def get_dashboard() -> dict[str, Any]:
         ) from exc
 
 
-@router.get("/clients/high-risk", dependencies=[Depends(verifier_cle_api)])
+@router.get("/clients/high-risk", dependencies=[Depends(verifier_acces)])
 def get_high_risk_clients(limit: int = 10) -> dict[str, Any]:
     """Retourne la liste des clients présentant le plus haut risque de churn.
 
@@ -682,7 +736,7 @@ def _ecrire_dataset(destination: Path, contenu: bytes) -> Path:
         return secours
 
 
-@router.post("/upload", dependencies=[Depends(verifier_cle_api)])
+@router.post("/upload", dependencies=[Depends(verifier_acces)])
 def upload(file: UploadFile = File(...), auto_train: bool = False) -> dict[str, Any]:
     """Dépose un dataset dans data/ et renvoie un aperçu du schéma détecté.
 
@@ -756,7 +810,7 @@ def train_status() -> dict[str, Any]:
     return etat_courant()
 
 
-@router.post("/train/start", dependencies=[Depends(verifier_cle_api)])
+@router.post("/train/start", dependencies=[Depends(verifier_acces)])
 def train_start(payload: dict[str, Any] = Body(default={})) -> dict[str, Any]:
     """Lance l'entraînement **en arrière-plan** sur le dataset choisi.
 
@@ -789,7 +843,7 @@ def train_start(payload: dict[str, Any] = Body(default={})) -> dict[str, Any]:
     return lancer_entrainement(chemin)
 
 
-@router.post("/train", dependencies=[Depends(verifier_cle_api)])
+@router.post("/train", dependencies=[Depends(verifier_acces)])
 def train(payload: dict[str, Any] = Body(default={})) -> dict[str, Any]:
     """(Ré)entraîne le pipeline sur le dataset le plus récent de data/.
 
@@ -860,7 +914,7 @@ def _libelle_modele(meta: dict[str, Any]) -> str:
     return f"Prediction {cible}" if cible else "Modele"
 
 
-@router.get("/models", dependencies=[Depends(verifier_cle_api)])
+@router.get("/models", dependencies=[Depends(verifier_acces)])
 def list_models() -> dict[str, Any]:
     """Liste les modeles entraines disponibles dans le registre.
 
@@ -894,7 +948,7 @@ def list_models() -> dict[str, Any]:
     return {"active": active, "total": len(modeles), "models": modeles}
 
 
-@router.post("/models/activate", dependencies=[Depends(verifier_cle_api)])
+@router.post("/models/activate", dependencies=[Depends(verifier_acces)])
 def activate_model(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     """Bascule le modele actif vers une version du registre, sans re-entrainer.
 
@@ -930,7 +984,7 @@ def activate_model(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
 
 # ----- RAG (base de connaissances de retention) -----
 
-@router.get("/rag/status", dependencies=[Depends(verifier_cle_api)])
+@router.get("/rag/status", dependencies=[Depends(verifier_acces)])
 def rag_status() -> dict[str, Any]:
     """Etat du RAG : dossier knowledge/, nombre d'extraits indexes, actif ou non."""
     from app.copilot import rag
@@ -938,7 +992,7 @@ def rag_status() -> dict[str, Any]:
     return rag.statut()
 
 
-@router.post("/rag/reindex", dependencies=[Depends(verifier_cle_api)])
+@router.post("/rag/reindex", dependencies=[Depends(verifier_acces)])
 def rag_reindex() -> dict[str, Any]:
     """Force la reconstruction de l'index apres ajout/modif de documents."""
     from app.copilot import rag

@@ -9,7 +9,7 @@ import {
   Send,
   Sparkles,
 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect } from 'react'
 import { toast } from 'sonner'
 import { RiskScoreCard } from '@/components/client/risk-score-card'
 import { Button } from '@/components/ui/button'
@@ -29,56 +29,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://127.0.0.1:8000'
-
-interface Feature {
-  nom: string
-  type: 'numerique' | 'categoriel' | 'booleen' | 'date' | 'texte'
-  valeurs: (string | number)[] | null
-  min: number | null
-  max: number | null
-}
-
-interface Schema {
-  cible: string | null
-  type_probleme: string | null
-  features: Feature[]
-}
-
-interface PredictionResult {
-  risk_score: number
-  prediction: number
-  risk_level: 'faible' | 'moyen' | 'eleve'
-  modele: string
-}
-
-interface Recommendation {
-  action?: string
-  detail?: string
-  priority?: string
-  impact?: number
-}
-
-interface RetentionPlan {
-  source?: string
-  resume?: string
-  signaux?: string[]
-  etapes?: string[]
-  message?: string
-}
-
-interface EmailAlert {
-  subject?: string
-  body?: string
-}
-
-interface EnrichedRecommendation {
-  recommendations?: Recommendation[]
-  plan_retention?: RetentionPlan
-  email_alert?: EmailAlert
-  source_recommendations?: string
-}
+import { useAuth } from '@/lib/auth'
+import {
+  type EnrichedRecommendation,
+  type Feature,
+  type PredictSchema,
+  type PredictionResult,
+  type Recommendation,
+  usePredictState,
+} from '@/lib/session-state'
 
 function valeurInitiale(f: Feature): string {
   if (f.type === 'categoriel' || f.type === 'booleen') {
@@ -89,27 +48,32 @@ function valeurInitiale(f: Feature): string {
 }
 
 export default function PredictPage() {
-  const [schema, setSchema] = useState<Schema | null>(null)
-  const [values, setValues] = useState<Record<string, string>>({})
-  const [chargement, setChargement] = useState(true)
-  const [erreurSchema, setErreurSchema] = useState<string | null>(null)
-
-  const [predicting, setPredicting] = useState(false)
-  const [erreur, setErreur] = useState<string | null>(null)
-  const [resultat, setResultat] = useState<PredictionResult | null>(null)
-  const [chargementConseil, setChargementConseil] = useState(false)
-  const [conseil, setConseil] = useState<EnrichedRecommendation | null>(null)
-  const [erreurConseil, setErreurConseil] = useState<string | null>(null)
-
-  // Alerte email (brouillon uniquement — aucun envoi automatique).
-  const [prepAlerte, setPrepAlerte] = useState(false)
-  const [alerte, setAlerte] = useState<{ sujet: string; corps: string } | null>(null)
-  const [destinataire, setDestinataire] = useState('benfadhelamine9@gmail.com')
+  const { apiFetch } = useAuth()
+  const { state, patch } = usePredictState()
+  const {
+    schema,
+    values,
+    chargement,
+    erreurSchema,
+    predicting,
+    erreur,
+    resultat,
+    chargementConseil,
+    conseil,
+    erreurConseil,
+    prepAlerte,
+    alerte,
+    destinataire,
+  } = state
 
   useEffect(() => {
+    if (schema) {
+      patch({ chargement: false }) // déjà chargé (retour sur la page)
+      return
+    }
     ;(async () => {
       try {
-        const rep = await fetch(`${API_URL}/schema`)
+        const rep = await apiFetch('/schema')
         if (!rep.ok) {
           const d = await rep.json().catch(() => ({}))
           throw new Error(
@@ -118,29 +82,30 @@ export default function PredictPage() {
               : d.detail ?? `Erreur ${rep.status}`,
           )
         }
-        const s: Schema = await rep.json()
-        setSchema(s)
+        const s: PredictSchema = await rep.json()
         const init: Record<string, string> = {}
         s.features.forEach((f) => (init[f.nom] = valeurInitiale(f)))
-        setValues(init)
+        patch({ schema: s, values: init })
       } catch (e) {
-        setErreurSchema(
-          e instanceof Error && e.message.includes('fetch')
-            ? "Impossible de joindre l'API (uvicorn app.main:app)."
-            : (e as Error).message,
-        )
+        patch({
+          erreurSchema:
+            e instanceof Error && e.message.includes('fetch')
+              ? "Impossible de joindre l'API (uvicorn app.main:app)."
+              : (e as Error).message,
+        })
       } finally {
-        setChargement(false)
+        patch({ chargement: false })
       }
     })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const set = (nom: string, v: string) => setValues((prev) => ({ ...prev, [nom]: v }))
+  const set = (nom: string, v: string) => patch({ values: { ...values, [nom]: v } })
 
   const chargerConseilRetention = async (
     prediction: PredictionResult,
   ): Promise<EnrichedRecommendation> => {
-    const rep = await fetch(`${API_URL}/recommend/enriched`, {
+    const rep = await apiFetch('/recommend/enriched', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(values),
@@ -148,7 +113,7 @@ export default function PredictPage() {
 
     if (rep.ok) return (await rep.json()) as EnrichedRecommendation
 
-    const fallback = await fetch(`${API_URL}/recommend`, {
+    const fallback = await apiFetch('/recommend', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(values),
@@ -182,12 +147,14 @@ export default function PredictPage() {
   /** Prépare un brouillon d'email d'alerte (aucun envoi automatique). */
   const preparerAlerte = async () => {
     if (!resultat) return
-    setPrepAlerte(true)
+    patch({ prepAlerte: true })
     try {
       if (conseil?.email_alert?.subject && conseil.email_alert.body) {
-        setAlerte({
-          sujet: conseil.email_alert.subject,
-          corps: conseil.email_alert.body,
+        patch({
+          alerte: {
+            sujet: conseil.email_alert.subject,
+            corps: conseil.email_alert.body,
+          },
         })
         return
       }
@@ -196,12 +163,14 @@ export default function PredictPage() {
 
       try {
         const data = conseil ?? (await chargerConseilRetention(resultat))
-        setConseil(data)
+        patch({ conseil: data })
         recos = data.recommendations ?? []
         if (data.email_alert?.subject && data.email_alert?.body) {
-          setAlerte({
-            sujet: data.email_alert.subject,
-            corps: data.email_alert.body,
+          patch({
+            alerte: {
+              sujet: data.email_alert.subject,
+              corps: data.email_alert.body,
+            },
           })
           return
         }
@@ -210,7 +179,7 @@ export default function PredictPage() {
       }
 
       try {
-        const rep = await fetch(`${API_URL}/recommend`, {
+        const rep = await apiFetch('/recommend', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(values),
@@ -251,22 +220,24 @@ Merci de prendre contact rapidement pour éviter la perte de ce client.
 
 — ChurnGuard`
 
-      setAlerte({ sujet, corps })
+      patch({ alerte: { sujet, corps } })
     } finally {
-      setPrepAlerte(false)
+      patch({ prepAlerte: false })
     }
   }
 
   const predire = async () => {
-    setPredicting(true)
-    setErreur(null)
-    setResultat(null)
-    setConseil(null)
-    setErreurConseil(null)
-    setChargementConseil(false)
-    setAlerte(null)
+    patch({
+      predicting: true,
+      erreur: null,
+      resultat: null,
+      conseil: null,
+      erreurConseil: null,
+      chargementConseil: false,
+      alerte: null,
+    })
     try {
-      const rep = await fetch(`${API_URL}/predict`, {
+      const rep = await apiFetch('/predict', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(values),
@@ -276,29 +247,28 @@ Merci de prendre contact rapidement pour éviter la perte de ce client.
         throw new Error(d.detail ?? `Erreur ${rep.status}`)
       }
       const prediction = (await rep.json()) as PredictionResult
-      setResultat(prediction)
-      setPredicting(false)
-
-      setChargementConseil(true)
+      patch({ resultat: prediction, predicting: false, chargementConseil: true })
       try {
-        setConseil(await chargerConseilRetention(prediction))
+        patch({ conseil: await chargerConseilRetention(prediction) })
       } catch (err) {
-        setErreurConseil(
-          err instanceof Error && err.message.includes('fetch')
-            ? "Impossible de charger le plan de rétention."
-            : (err as Error).message,
-        )
+        patch({
+          erreurConseil:
+            err instanceof Error && err.message.includes('fetch')
+              ? "Impossible de charger le plan de rétention."
+              : (err as Error).message,
+        })
       } finally {
-        setChargementConseil(false)
+        patch({ chargementConseil: false })
       }
     } catch (e) {
-      setErreur(
-        e instanceof Error && e.message.includes('fetch')
-          ? "Impossible de joindre l'API (uvicorn app.main:app)."
-          : (e as Error).message,
-      )
+      patch({
+        erreur:
+          e instanceof Error && e.message.includes('fetch')
+            ? "Impossible de joindre l'API (uvicorn app.main:app)."
+            : (e as Error).message,
+      })
     } finally {
-      setPredicting(false)
+      patch({ predicting: false })
     }
   }
 
@@ -525,7 +495,7 @@ Merci de prendre contact rapidement pour éviter la perte de ce client.
                           <Input
                             type="email"
                             value={destinataire}
-                            onChange={(e) => setDestinataire(e.target.value)}
+                            onChange={(e) => patch({ destinataire: e.target.value })}
                           />
                         </div>
                         <div>

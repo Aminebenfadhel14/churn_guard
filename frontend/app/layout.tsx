@@ -2,8 +2,11 @@ import { Analytics } from '@vercel/analytics/next'
 import type { Metadata, Viewport } from 'next'
 import { Geist, Geist_Mono } from 'next/font/google'
 import { AppHeader } from '@/components/app-header'
+import { AuthGate } from '@/components/auth-gate'
 import { ThemeProvider } from '@/components/theme-provider'
 import { Toaster } from '@/components/ui/sonner'
+import { AuthProvider } from '@/lib/auth'
+import { SessionStateProvider } from '@/lib/session-state'
 import './globals.css'
 
 const geistSans = Geist({ variable: '--font-geist-sans', subsets: ['latin'] })
@@ -45,11 +48,17 @@ export default function RootLayout({
           enableSystem
           disableTransitionOnChange
         >
-          <div className="flex min-h-svh flex-col">
-            <AppHeader />
-            <main className="flex-1">{children}</main>
-          </div>
-          <Toaster richColors position="top-right" />
+          <AuthProvider>
+            <SessionStateProvider>
+              <AuthGate>
+                <div className="flex min-h-svh flex-col">
+                  <AppHeader />
+                  <main className="flex-1">{children}</main>
+                </div>
+              </AuthGate>
+              <Toaster richColors position="top-right" />
+            </SessionStateProvider>
+          </AuthProvider>
         </ThemeProvider>
         {process.env.NODE_ENV === 'production' && <Analytics />}
       </body>

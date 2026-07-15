@@ -19,6 +19,7 @@ ENV/
 .env
 .env.local
 *.local
+users.json
 
 # ===== Modèles & artefacts ML =====
 *.pkl

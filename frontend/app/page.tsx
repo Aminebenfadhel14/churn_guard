@@ -24,8 +24,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://127.0.0.1:8000'
+import { useAuth } from '@/lib/auth'
 
 interface Dashboard {
   dataset: string
@@ -57,6 +56,7 @@ function formatVal(v: string | number | boolean | null): string {
 }
 
 export default function DashboardPage() {
+  const { apiFetch } = useAuth()
   const [d, setD] = useState<Dashboard | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -67,7 +67,7 @@ export default function DashboardPage() {
       setLoading(true)
       setError(null)
       try {
-        const rep = await fetch(`${API_URL}/dashboard`)
+        const rep = await apiFetch('/dashboard')
         if (!rep.ok) {
           const j = await rep.json().catch(() => ({}))
           throw new Error(j.detail ?? `Erreur ${rep.status}`)
@@ -88,6 +88,7 @@ export default function DashboardPage() {
     return () => {
       annule = true
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const stats = d
