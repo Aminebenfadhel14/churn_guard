@@ -14,7 +14,7 @@ import {
   Users,
 } from 'lucide-react'
 import Link from 'next/link'
-import { usePathname } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
 import { useState } from 'react'
 import { ModelSelector } from '@/components/model-selector'
 import { ThemeToggle } from '@/components/theme-toggle'
@@ -23,12 +23,23 @@ import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { useAuth } from '@/lib/auth'
 import { cn } from '@/lib/utils'
+
+function initiales(nom: string): string {
+  return nom
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((mot) => mot[0]?.toUpperCase())
+    .join('')
+}
 
 const NAV = [
   { href: '/', label: 'Dashboard', icon: LayoutDashboard },
@@ -41,10 +52,15 @@ const NAV = [
 
 export function AppHeader() {
   const pathname = usePathname()
+  const router = useRouter()
+  const { user, logout } = useAuth()
   const [open, setOpen] = useState(false)
 
   const isActive = (href: string) =>
     href === '/' ? pathname === '/' : pathname.startsWith(href)
+
+  // Pas de nav/menu utilisateur sur l'écran de connexion.
+  if (pathname === '/login') return null
 
   return (
     <header className="sticky top-0 z-40 border-b border-border bg-background/85 backdrop-blur supports-[backdrop-filter]:bg-background/70">
@@ -92,31 +108,33 @@ export function AppHeader() {
             >
               <Avatar className="size-7">
                 <AvatarFallback className="bg-primary/10 text-primary text-xs font-semibold">
-                  MB
+                  {user ? initiales(user.nom_complet) : '…'}
                 </AvatarFallback>
               </Avatar>
               <span className="hidden text-sm font-medium sm:inline">
-                Med Amine
+                {user?.nom_complet ?? '…'}
               </span>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-52">
-              <DropdownMenuLabel>
-                <div className="flex flex-col">
-                  <span>Medamine Ben Fadhel</span>
-                  <span className="text-xs font-normal text-muted-foreground">
-                    Responsable rétention
-                  </span>
-                </div>
-              </DropdownMenuLabel>
+              <DropdownMenuGroup>
+                <DropdownMenuLabel>
+                  <div className="flex flex-col">
+                    <span>{user?.nom_complet ?? '…'}</span>
+                    <span className="text-xs font-normal text-muted-foreground">
+                      {user?.role ?? ''}
+                    </span>
+                  </div>
+                </DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => router.push('/profile')}>
+                  <User className="size-4" /> Profil
+                </DropdownMenuItem>
+                <DropdownMenuItem>
+                  <Settings className="size-4" /> Paramètres
+                </DropdownMenuItem>
+              </DropdownMenuGroup>
               <DropdownMenuSeparator />
-              <DropdownMenuItem>
-                <User className="size-4" /> Profil
-              </DropdownMenuItem>
-              <DropdownMenuItem>
-                <Settings className="size-4" /> Paramètres
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem className="text-danger focus:text-danger">
+              <DropdownMenuItem className="text-danger focus:text-danger" onClick={logout}>
                 <LogOut className="size-4" /> Déconnexion
               </DropdownMenuItem>
             </DropdownMenuContent>

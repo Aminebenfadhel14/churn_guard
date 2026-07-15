@@ -11,7 +11,7 @@ import {
   User,
   Zap,
 } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef } from 'react'
 import { toast } from 'sonner'
 import { RiskScoreCard } from '@/components/client/risk-score-card'
 import { Button } from '@/components/ui/button'
@@ -31,45 +31,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { useAuth } from '@/lib/auth'
+import { type CopilotSchema, type Feature, type Message, useCopilotState } from '@/lib/session-state'
 import { cn } from '@/lib/utils'
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://127.0.0.1:8000'
-
-interface Feature {
-  nom: string
-  type: 'numerique' | 'categoriel' | 'booleen' | 'date' | 'texte'
-  valeurs: (string | number)[] | null
-  min: number | null
-  max: number | null
-}
-interface Schema {
-  cible: string | null
-  features: Feature[]
-}
-interface Message {
-  role: 'user' | 'assistant'
-  content: string
-}
-interface Facteur {
-  feature: string
-  label: string
-  contribution: number
-}
-interface Action {
-  action?: string
-  detail?: string
-}
-interface ExpressResult {
-  risk_score: number
-  risk_level: string
-  facteurs: Facteur[]
-  recommendations: Action[]
-  email_alerte?: { subject?: string; body?: string }
-  escalade: boolean
-  decision: string
-  synthese: string
-  source_synthese: string
-}
 
 const SUGGESTIONS = [
   'Traite ce client de A à Z.',
@@ -87,106 +51,93 @@ function valeurInitiale(f: Feature): string {
 }
 
 export default function CopilotPage() {
-  const [schema, setSchema] = useState<Schema | null>(null)
-  const [values, setValues] = useState<Record<string, string>>({})
-  const [erreurSchema, setErreurSchema] = useState<string | null>(null)
-
-  const [mode, setMode] = useState<'assistant' | 'express'>('assistant')
-
-  // Chat
-  const [messages, setMessages] = useState<Message[]>([])
-  const [input, setInput] = useState('')
-  const [sending, setSending] = useState(false)
+  const { apiFetch } = useAuth()
+  const { state, patch } = useCopilotState()
+  const { schema, values, erreurSchema, mode, messages, input, sending, running, erreurExpress, res } = state
   const finRef = useRef<HTMLDivElement>(null)
 
-  // Analyse express
-  const [running, setRunning] = useState(false)
-  const [erreurExpress, setErreurExpress] = useState<string | null>(null)
-  const [res, setRes] = useState<ExpressResult | null>(null)
-
   useEffect(() => {
+    if (schema) return // déjà chargé (retour sur la page) : on ne réinitialise pas le formulaire.
     void (async () => {
       try {
-        const rep = await fetch(`${API_URL}/schema`)
+        const rep = await apiFetch('/schema')
         if (!rep.ok)
           throw new Error('Aucun modèle entraîné (lance un entraînement depuis Upload).')
-        const s: Schema = await rep.json()
-        setSchema(s)
+        const s: CopilotSchema = await rep.json()
         const init: Record<string, string> = {}
         s.features.forEach((f) => (init[f.nom] = valeurInitiale(f)))
-        setValues(init)
+        patch({ schema: s, values: init })
       } catch (e) {
-        setErreurSchema(
-          e instanceof Error && e.message.includes('fetch')
-            ? "Impossible de joindre l'API (uvicorn app.main:app)."
-            : (e as Error).message,
-        )
+        patch({
+          erreurSchema:
+            e instanceof Error && e.message.includes('fetch')
+              ? "Impossible de joindre l'API (uvicorn app.main:app)."
+              : (e as Error).message,
+        })
       }
     })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {
     finRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, sending])
 
-  const set = (nom: string, v: string) =>
-    setValues((prev) => ({ ...prev, [nom]: v }))
+  const set = (nom: string, v: string) => patch({ values: { ...values, [nom]: v } })
 
   const envoyer = async (texte?: string) => {
     const q = (texte ?? input).trim()
     if (!q || sending) return
-    setMode('assistant')
     const nouveaux: Message[] = [...messages, { role: 'user', content: q }]
-    setMessages(nouveaux)
-    setInput('')
-    setSending(true)
+    patch({ mode: 'assistant', messages: nouveaux, input: '', sending: true })
     try {
-      const rep = await fetch(`${API_URL}/copilot/chat`, {
+      const rep = await apiFetch('/copilot/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ messages: nouveaux, client: values }),
       })
       const d = await rep.json().catch(() => ({}))
       if (!rep.ok) throw new Error(d.detail ?? `Erreur ${rep.status}`)
-      setMessages((m) => [...m, { role: 'assistant', content: d.reply ?? '(vide)' }])
+      patch({ messages: [...nouveaux, { role: 'assistant', content: d.reply ?? '(vide)' }] })
     } catch (e) {
-      setMessages((m) => [
-        ...m,
-        {
-          role: 'assistant',
-          content:
-            '⚠️ ' +
-            (e instanceof Error && e.message.includes('fetch')
-              ? 'API injoignable (uvicorn app.main:app).'
-              : (e as Error).message),
-        },
-      ])
+      patch({
+        messages: [
+          ...nouveaux,
+          {
+            role: 'assistant',
+            content:
+              '⚠️ ' +
+              (e instanceof Error && e.message.includes('fetch')
+                ? 'API injoignable (uvicorn app.main:app).'
+                : (e as Error).message),
+          },
+        ],
+      })
     } finally {
-      setSending(false)
+      patch({ sending: false })
     }
   }
 
   const lancerExpress = async () => {
-    setRunning(true)
-    setErreurExpress(null)
-    setRes(null)
+    patch({ running: true, erreurExpress: null, res: null })
     try {
-      const rep = await fetch(`${API_URL}/copilot`, {
+      const rep = await apiFetch('/copilot', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(values),
       })
       const d = await rep.json().catch(() => ({}))
       if (!rep.ok) throw new Error(d.detail ?? `Erreur ${rep.status}`)
-      setRes(d)
+      patch({ res: d })
     } catch (e) {
-      setErreurExpress(
-        e instanceof Error && e.message.includes('fetch')
-          ? "Impossible de joindre l'API (uvicorn app.main:app)."
-          : (e as Error).message,
-      )
+      patch({
+        erreurExpress:
+          e instanceof Error && e.message.includes('fetch')
+            ? "Impossible de joindre l'API (uvicorn app.main:app)."
+            : (e as Error).message,
+      })
     } finally {
-      setRunning(false)
+      patch({ running: false })
     }
   }
 
@@ -249,7 +200,7 @@ export default function CopilotPage() {
           <div className="mb-3 inline-flex rounded-lg border border-border bg-muted/40 p-1">
             <button
               type="button"
-              onClick={() => setMode('assistant')}
+              onClick={() => patch({ mode: 'assistant' })}
               className={cn(
                 'inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors',
                 mode === 'assistant'
@@ -261,7 +212,7 @@ export default function CopilotPage() {
             </button>
             <button
               type="button"
-              onClick={() => setMode('express')}
+              onClick={() => patch({ mode: 'express' })}
               className={cn(
                 'inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors',
                 mode === 'express'
@@ -328,7 +279,7 @@ export default function CopilotPage() {
                 <Input
                   placeholder="Écris ta demande…"
                   value={input}
-                  onChange={(e) => setInput(e.target.value)}
+                  onChange={(e) => patch({ input: e.target.value })}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' && !e.shiftKey) {
                       e.preventDefault()

@@ -30,57 +30,10 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { useAuth } from '@/lib/auth'
+import { type Apercu, type Drift, type Entrainement, useUploadState } from '@/lib/session-state'
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://127.0.0.1:8000'
 const EXT_OK = ['.csv', '.xlsx', '.xls', '.parquet']
-
-interface ColonneDrift {
-  colonne: string
-  psi: number
-  niveau: 'stable' | 'modere' | 'fort'
-}
-
-interface Drift {
-  niveau_global: 'stable' | 'modere' | 'fort'
-  psi_moyen: number
-  n_colonnes_analysees: number
-  colonnes: ColonneDrift[]
-}
-
-interface Apercu {
-  fichier: string
-  lignes: number
-  colonnes: number
-  cible_detectee: string | null
-  type_probleme: string | null
-  features: string[]
-  entrainement?: string
-  drift?: Drift | null
-}
-
-interface Entrainement {
-  meilleur_modele: string
-  version: string
-  raison_selection: string
-  test_roc_auc: number
-  test_f1: number
-  test_accuracy: number
-  modeles_compares: string[]
-  resultats_modeles: ResultatModele[]
-}
-
-interface ResultatModele {
-  nom: string
-  selectionne: boolean
-  cv_roc_auc: number
-  cv_f1: number
-  cv_accuracy: number
-  test_roc_auc: number
-  test_f1: number
-  test_accuracy: number
-  test_precision: number
-  test_recall: number
-}
 
 interface EtatEntrainement {
   statut: 'idle' | 'en_cours' | 'termine' | 'echec'
@@ -100,14 +53,11 @@ const score = (v: number) => Number.isFinite(v) ? v.toFixed(4) : '—'
 
 export default function UploadPage() {
   const inputRef = useRef<HTMLInputElement>(null)
-  const [fichier, setFichier] = useState<File | null>(null)
   const [survol, setSurvol] = useState(false)
+  const { apiFetch } = useAuth()
 
-  const [uploading, setUploading] = useState(false)
-  const [apercu, setApercu] = useState<Apercu | null>(null)
-  const [entrainant, setEntrainant] = useState(false)
-  const [progression, setProgression] = useState<string>('')
-  const [resultat, setResultat] = useState<Entrainement | null>(null)
+  const { state, patch } = useUploadState()
+  const { fichier, uploading, apercu, entrainant, progression, resultat } = state
 
   // Empêche deux boucles de suivi simultanées.
   const suiviActif = useRef(false)
@@ -118,9 +68,7 @@ export default function UploadPage() {
   const suivreEntrainement = async () => {
     if (suiviActif.current) return
     suiviActif.current = true
-    setEntrainant(true)
-    setResultat(null)
-    setProgression('Entraînement en cours… (comparaison des modèles)')
+    patch({ entrainant: true, resultat: null, progression: 'Entraînement en cours… (comparaison des modèles)' })
 
     const MAX_TENTATIVES = 240 // ~10 min à 2,5 s d'intervalle
     try {
@@ -128,15 +76,15 @@ export default function UploadPage() {
         await attendre(2500)
         let etat: EtatEntrainement
         try {
-          const rep = await fetch(`${API_URL}/train/status`)
+          const rep = await apiFetch('/train/status')
           etat = await rep.json()
         } catch {
           continue // erreur réseau transitoire : on réessaie
         }
-        if (etat.message) setProgression(etat.message)
+        if (etat.message) patch({ progression: etat.message })
 
         if (etat.statut === 'termine' && etat.resultat) {
-          setResultat(etat.resultat)
+          patch({ resultat: etat.resultat })
           toast.success('Modèle entraîné et activé', {
             description: etat.resultat.meilleur_modele,
           })
@@ -153,7 +101,7 @@ export default function UploadPage() {
         description: 'Le suivi a expiré. Vérifiez le terminal de l’API.',
       })
     } finally {
-      setEntrainant(false)
+      patch({ entrainant: false })
       suiviActif.current = false
     }
   }
@@ -161,9 +109,9 @@ export default function UploadPage() {
   /** Déclenche l'entraînement (au clic) puis suit sa progression. */
   const lancerEntrainement = async () => {
     if (!apercu || suiviActif.current) return
-    setResultat(null)
+    patch({ resultat: null })
     try {
-      const rep = await fetch(`${API_URL}/train/start`, {
+      const rep = await apiFetch('/train/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ fichier: apercu.fichier }),
@@ -189,22 +137,18 @@ export default function UploadPage() {
       toast.error('Format non supporté', { description: `Acceptés : ${EXT_OK.join(', ')}` })
       return
     }
-    setFichier(f)
-    setApercu(null)
-    setResultat(null)
-    setProgression('')
     // Upload immédiat : le backend déclenche automatiquement l'entraînement.
-    setUploading(true)
+    patch({ fichier: f, apercu: null, resultat: null, progression: '', uploading: true })
     try {
       const fd = new FormData()
       fd.append('file', f)
-      const rep = await fetch(`${API_URL}/upload`, { method: 'POST', body: fd })
+      const rep = await apiFetch('/upload', { method: 'POST', body: fd })
       if (!rep.ok) {
         const d = await rep.json().catch(() => ({}))
         throw new Error(d.detail ?? `Erreur ${rep.status}`)
       }
       const data: Apercu = await rep.json()
-      setApercu(data)
+      patch({ apercu: data })
       toast.success('Fichier importé', {
         description: "Vérifiez le schéma puis lancez l'entraînement.",
       })
@@ -228,9 +172,9 @@ export default function UploadPage() {
             ? "API injoignable (uvicorn app.main:app)."
             : (e as Error).message,
       })
-      setFichier(null)
+      patch({ fichier: null })
     } finally {
-      setUploading(false)
+      patch({ uploading: false })
     }
   }
 
@@ -286,7 +230,7 @@ export default function UploadPage() {
               </div>
               {!uploading && !entrainant && (
                 <Button variant="ghost" size="icon" aria-label="Retirer"
-                  onClick={() => { setFichier(null); setApercu(null); setResultat(null); setProgression('') }}>
+                  onClick={() => patch({ fichier: null, apercu: null, resultat: null, progression: '' })}>
                   <X className="size-4" />
                 </Button>
               )}

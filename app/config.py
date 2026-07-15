@@ -27,6 +27,16 @@ class Settings(BaseSettings):
     # Cle attendue dans l'en-tete HTTP des requetes protegees.
     api_key: str = "change-me-please"
 
+    # ----- Authentification (sessions utilisateur du frontend web) -----
+    # Compte admin cree automatiquement au premier demarrage si users.json
+    # n'existe pas encore (voir app/auth/store.py). A changer en production.
+    admin_username: str = "admin"
+    admin_password: str = "change-me-please"
+    # Cle de signature des tokens de session (JWT). A changer en production.
+    jwt_secret_key: str = "change-me-please"
+    jwt_expire_minutes: int = 1440  # 24h
+    users_file: Path = BASE_DIR / "users.json"
+
     # ----- Chemins de travail -----
     data_dir: Path = BASE_DIR / "data"
     models_dir: Path = BASE_DIR / "models"

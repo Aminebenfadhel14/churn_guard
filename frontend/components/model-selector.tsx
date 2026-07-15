@@ -2,8 +2,7 @@
 
 import { Layers } from 'lucide-react'
 import { useEffect, useState } from 'react'
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://127.0.0.1:8000'
+import { useAuth } from '@/lib/auth'
 
 interface ModelInfo {
   version: string
@@ -22,13 +21,14 @@ interface ModelInfo {
  * que dashboard, clients, prédiction et schéma reflètent le nouveau modèle.
  */
 export function ModelSelector() {
+  const { apiFetch } = useAuth()
   const [models, setModels] = useState<ModelInfo[]>([])
   const [active, setActive] = useState<string>('')
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
     let annule = false
-    fetch(`${API_URL}/models`)
+    apiFetch('/models')
       .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
       .then((d) => {
         if (annule) return
@@ -39,13 +39,14 @@ export function ModelSelector() {
     return () => {
       annule = true
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   async function changer(version: string) {
     if (!version || version === active || busy) return
     setBusy(true)
     try {
-      const r = await fetch(`${API_URL}/models/activate`, {
+      const r = await apiFetch('/models/activate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ version }),
