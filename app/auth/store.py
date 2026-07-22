@@ -1,70 +1,53 @@
 """Annuaire d'utilisateurs (Couche Authentification).
 
-Stockage JSON local (``settings.users_file``), dans le même esprit que le
-reste du projet (pas de base de données). Un compte admin est créé
-automatiquement au premier démarrage, à partir de
-``settings.admin_username`` / ``settings.admin_password``.
+Stockage en base de donnees (SQLite en local, Postgres en production —
+voir ``app/db.py``). Chaque utilisateur appartient a une ``Organisation``
+(tenant) ; le username reste unique globalement (pas de selecteur
+d'organisation au login).
 """
 
 from __future__ import annotations
 
-import json
-from dataclasses import asdict, dataclass
-from pathlib import Path
+from sqlalchemy.orm import Session
 
+from app.auth.models import Organisation, Utilisateur
 from app.auth.passwords import hacher_mot_de_passe, verifier_mot_de_passe
 from app.config import settings
 
-
-@dataclass
-class Utilisateur:
-    username: str
-    mot_de_passe_hash: str
-    nom_complet: str
-    role: str = "operateur"
-
-    def public(self) -> dict[str, str]:
-        return {"username": self.username, "nom_complet": self.nom_complet, "role": self.role}
-
-
-def _chemin() -> Path:
-    return settings.users_file
-
-
-def _amorcer_si_absent(chemin: Path) -> None:
-    """Crée l'annuaire avec un unique compte admin s'il n'existe pas encore."""
-    if chemin.exists():
-        return
-    chemin.parent.mkdir(parents=True, exist_ok=True)
-    admin = Utilisateur(
-        username=settings.admin_username,
-        mot_de_passe_hash=hacher_mot_de_passe(settings.admin_password),
-        nom_complet="Administrateur",
-        role="admin",
-    )
-    chemin.write_text(json.dumps({admin.username: asdict(admin)}, indent=2, ensure_ascii=False), encoding="utf-8")
+__all__ = [
+    "Organisation",
+    "Utilisateur",
+    "amorcer_organisation_defaut",
+    "authentifier",
+    "creer_organisation_avec_admin",
+    "creer_utilisateur",
+    "modifier_utilisateur",
+    "supprimer_utilisateur",
+    "trouver_utilisateur",
+    "trouver_utilisateur_par_email",
+    "trouver_utilisateur_par_identifiant",
+]
 
 
-def charger_utilisateurs() -> dict[str, Utilisateur]:
-    chemin = _chemin()
-    _amorcer_si_absent(chemin)
-    brut: dict[str, dict[str, str]] = json.loads(chemin.read_text(encoding="utf-8"))
-    return {nom: Utilisateur(**donnees) for nom, donnees in brut.items()}
+def trouver_utilisateur(db: Session, username: str) -> Utilisateur | None:
+    return db.query(Utilisateur).filter(Utilisateur.username == username).first()
 
 
-def _sauvegarder(utilisateurs: dict[str, Utilisateur]) -> None:
-    chemin = _chemin()
-    chemin.parent.mkdir(parents=True, exist_ok=True)
-    brut = {nom: asdict(u) for nom, u in utilisateurs.items()}
-    chemin.write_text(json.dumps(brut, indent=2, ensure_ascii=False), encoding="utf-8")
+def trouver_utilisateur_par_email(db: Session, email: str) -> Utilisateur | None:
+    return db.query(Utilisateur).filter(Utilisateur.email == email).first()
 
 
-def trouver_utilisateur(username: str) -> Utilisateur | None:
-    return charger_utilisateurs().get(username)
+def trouver_utilisateur_par_identifiant(db: Session, identifiant: str) -> Utilisateur | None:
+    """Cherche par email d'abord (comptes crees par un admin : username == email),
+    puis par username (comptes plus anciens, ou admin auto-amorce sans email)."""
+    utilisateur = trouver_utilisateur_par_email(db, identifiant.lower())
+    if utilisateur is not None:
+        return utilisateur
+    return trouver_utilisateur(db, identifiant)
 
 
-def authentifier(username: str, mot_de_passe: str) -> Utilisateur | None:
-    utilisateur = trouver_utilisateur(username)
+def authentifier(db: Session, identifiant: str, mot_de_passe: str) -> Utilisateur | None:
+    utilisateur = trouver_utilisateur_par_identifiant(db, identifiant)
     if utilisateur is None:
         return None
     if not verifier_mot_de_passe(mot_de_passe, utilisateur.mot_de_passe_hash):
@@ -72,15 +55,117 @@ def authentifier(username: str, mot_de_passe: str) -> Utilisateur | None:
     return utilisateur
 
 
-def creer_utilisateur(username: str, mot_de_passe: str, nom_complet: str, role: str = "operateur") -> Utilisateur:
-    """Ajoute (ou remplace) un compte dans l'annuaire."""
-    utilisateurs = charger_utilisateurs()
+def creer_utilisateur(
+    db: Session,
+    organisation_id: int,
+    username: str,
+    mot_de_passe: str,
+    nom_complet: str,
+    role: str = "operateur",
+    email: str | None = None,
+) -> Utilisateur:
+    """Ajoute un compte, rattache a une organisation existante."""
     utilisateur = Utilisateur(
+        organisation_id=organisation_id,
         username=username,
+        email=email,
         mot_de_passe_hash=hacher_mot_de_passe(mot_de_passe),
         nom_complet=nom_complet,
         role=role,
     )
-    utilisateurs[username] = utilisateur
-    _sauvegarder(utilisateurs)
+    db.add(utilisateur)
+    db.commit()
+    db.refresh(utilisateur)
     return utilisateur
+
+
+def creer_organisation_avec_admin(
+    db: Session,
+    nom_organisation: str,
+    username: str,
+    mot_de_passe: str,
+    nom_complet: str,
+    email: str | None = None,
+) -> tuple[Organisation, Utilisateur]:
+    """Cree une nouvelle organisation avec son premier compte admin (inscription libre-service)."""
+    organisation = Organisation(nom=nom_organisation)
+    db.add(organisation)
+    db.flush()  # attribue organisation.id sans terminer la transaction
+    admin = Utilisateur(
+        organisation_id=organisation.id,
+        username=username,
+        email=email,
+        mot_de_passe_hash=hacher_mot_de_passe(mot_de_passe),
+        nom_complet=nom_complet,
+        role="admin",
+    )
+    db.add(admin)
+    db.commit()
+    db.refresh(organisation)
+    db.refresh(admin)
+    return organisation, admin
+
+
+def modifier_utilisateur(
+    db: Session,
+    organisation_id: int,
+    username: str,
+    nom_complet: str | None = None,
+    role: str | None = None,
+    mot_de_passe: str | None = None,
+    email: str | None = None,
+) -> Utilisateur | None:
+    """Met a jour un compte de l'organisation donnee. Renvoie None si introuvable.
+
+    Seuls les champs fournis (non None) sont modifies.
+    """
+    utilisateur = (
+        db.query(Utilisateur)
+        .filter(Utilisateur.organisation_id == organisation_id, Utilisateur.username == username)
+        .first()
+    )
+    if utilisateur is None:
+        return None
+    if nom_complet is not None:
+        utilisateur.nom_complet = nom_complet
+    if role is not None:
+        utilisateur.role = role
+    if mot_de_passe is not None:
+        utilisateur.mot_de_passe_hash = hacher_mot_de_passe(mot_de_passe)
+    if email is not None:
+        utilisateur.email = email
+    db.commit()
+    db.refresh(utilisateur)
+    return utilisateur
+
+
+def supprimer_utilisateur(db: Session, organisation_id: int, username: str) -> bool:
+    """Supprime un compte de l'organisation donnee. Renvoie False si introuvable."""
+    utilisateur = (
+        db.query(Utilisateur)
+        .filter(Utilisateur.organisation_id == organisation_id, Utilisateur.username == username)
+        .first()
+    )
+    if utilisateur is None:
+        return False
+    db.delete(utilisateur)
+    db.commit()
+    return True
+
+
+def amorcer_organisation_defaut(db: Session) -> None:
+    """Cree l'organisation "Default" et son admin (depuis settings) si la base est vide.
+
+    Preserve le comportement historique (admin unique auto-cree au premier
+    demarrage) pour les deploiements qui n'utilisent pas l'inscription
+    libre-service.
+    """
+    if db.query(Organisation).first() is not None:
+        return
+    creer_organisation_avec_admin(
+        db,
+        nom_organisation="Default",
+        username=settings.admin_username,
+        mot_de_passe=settings.admin_password,
+        nom_complet="Administrateur",
+    )

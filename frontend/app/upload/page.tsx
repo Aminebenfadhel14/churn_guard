@@ -31,7 +31,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { useAuth } from '@/lib/auth'
-import { type Apercu, type Drift, type Entrainement, useUploadState } from '@/lib/session-state'
+import { type Apercu, type Drift, type Entrainement, type Qualite, useUploadState } from '@/lib/session-state'
 
 const EXT_OK = ['.csv', '.xlsx', '.xls', '.parquet']
 
@@ -261,6 +261,8 @@ export default function UploadPage() {
               </div>
             </div>
 
+            {apercu.qualite && <QualiteCard qualite={apercu.qualite} cible={apercu.cible_detectee} />}
+
             {apercu.drift && <DriftCard drift={apercu.drift} />}
 
             {entrainant ? (
@@ -355,6 +357,105 @@ function Info({ label, valeur }: { label: string; valeur: string }) {
     <div className="rounded-lg bg-muted/50 p-2.5">
       <div className="text-xs text-muted-foreground">{label}</div>
       <div className="font-medium">{valeur}</div>
+    </div>
+  )
+}
+
+const NIVEAU_STYLE: Record<'equilibre' | 'modere' | 'fort', { texte: string; barre: string; libelle: string }> = {
+  equilibre: { texte: 'text-success', barre: 'bg-success', libelle: 'Classes équilibrées' },
+  modere: { texte: 'text-warning', barre: 'bg-warning', libelle: 'Déséquilibre modéré' },
+  fort: { texte: 'text-danger', barre: 'bg-danger', libelle: 'Déséquilibre fort' },
+}
+
+function barreManquant(taux: number): string {
+  if (taux >= 30) return 'bg-danger'
+  if (taux >= 10) return 'bg-warning'
+  return 'bg-muted-foreground/40'
+}
+
+/** Qualité des données avant entraînement : valeurs manquantes + équilibre des
+ * classes de la cible — pour repérer un problème avant de lancer un
+ * entraînement de plusieurs minutes pour rien. */
+function QualiteCard({ qualite, cible }: { qualite: Qualite; cible: string | null }) {
+  const { colonnes_manquantes, colonnes_critiques, equilibre_classes } = qualite
+  const rien = colonnes_manquantes.length === 0 && !equilibre_classes
+
+  if (rien) {
+    return (
+      <div className="rounded-lg border border-success/40 bg-success/5 p-3 text-sm text-success">
+        <div className="flex items-center gap-2 font-medium">
+          <ShieldCheck className="size-4" />
+          Aucune valeur manquante, classes équilibrées.
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-3 rounded-lg border border-border p-3 text-sm">
+      {equilibre_classes && (
+        <div>
+          <div
+            className={`flex items-center gap-2 font-medium ${NIVEAU_STYLE[equilibre_classes.niveau].texte}`}
+          >
+            {equilibre_classes.niveau === 'equilibre' ? (
+              <ShieldCheck className="size-4" />
+            ) : (
+              <AlertTriangle className="size-4" />
+            )}
+            {NIVEAU_STYLE[equilibre_classes.niveau].libelle}
+            {cible && <span className="font-normal text-muted-foreground">— colonne « {cible} »</span>}
+          </div>
+          <ul className="mt-2 space-y-1.5">
+            {equilibre_classes.repartition.map((r) => (
+              <li key={r.classe} className="flex items-center gap-2 text-xs">
+                <span className="w-20 shrink-0 truncate text-foreground/80">{r.classe}</span>
+                <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+                  <span
+                    className={`block h-full rounded-full ${NIVEAU_STYLE[equilibre_classes.niveau].barre}`}
+                    style={{ width: `${Math.max(r.pourcentage, 2)}%` }}
+                  />
+                </span>
+                <span className="w-12 shrink-0 text-right text-muted-foreground">{r.pourcentage}%</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {colonnes_manquantes.length > 0 && (
+        <div>
+          <div
+            className={`flex items-center gap-2 font-medium ${colonnes_critiques.length > 0 ? 'text-danger' : 'text-warning'}`}
+          >
+            <AlertTriangle className="size-4" />
+            Valeurs manquantes ({colonnes_manquantes.length} colonne
+            {colonnes_manquantes.length > 1 ? 's' : ''})
+          </div>
+          <ul className="mt-2 space-y-1.5">
+            {colonnes_manquantes.slice(0, 5).map((c) => (
+              <li key={c.colonne} className="flex items-center gap-2 text-xs">
+                <span className="w-20 shrink-0 truncate text-foreground/80">{c.colonne}</span>
+                <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+                  <span
+                    className={`block h-full rounded-full ${barreManquant(c.taux_manquant)}`}
+                    style={{ width: `${Math.max(c.taux_manquant, 2)}%` }}
+                  />
+                </span>
+                <span className="w-12 shrink-0 text-right text-muted-foreground">
+                  {c.taux_manquant}%
+                </span>
+              </li>
+            ))}
+          </ul>
+          {colonnes_manquantes.length > 5 && (
+            <p className="mt-1.5 text-xs text-muted-foreground">
+              + {colonnes_manquantes.length - 5} autre{colonnes_manquantes.length - 5 > 1 ? 's' : ''}{' '}
+              colonne{colonnes_manquantes.length - 5 > 1 ? 's' : ''}.
+            </p>
+          )}
+        </div>
+      )}
     </div>
   )
 }

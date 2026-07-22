@@ -210,6 +210,8 @@ def entrainer_et_selectionner(
     modeles: dict[str, Any] | None = None,
     dossier_modeles: Path | None = None,
     nom_dataset: str | None = None,
+    username: str | None = None,
+    organisation_id: int | None = None,
 ) -> ResultatEntrainement:
     """Entraîne, compare, sélectionne le meilleur modèle et l'enregistre.
 
@@ -298,6 +300,8 @@ def entrainer_et_selectionner(
         dossier_modeles=dossier_modeles,
         reference_drift=reference_drift,
         nom_dataset=nom_dataset,
+        username=username,
+        organisation_id=organisation_id,
     )
 
     dossier = dossier_modeles or settings.models_dir

@@ -47,8 +47,16 @@ def enregistrer_modele(
     dossier_modeles: Path | None = None,
     reference_drift: dict[str, Any] | None = None,
     nom_dataset: str | None = None,
+    username: str | None = None,
+    organisation_id: int | None = None,
 ) -> dict[str, Any]:
-    """Enregistre une nouvelle version de modele et la rend active."""
+    """Enregistre une nouvelle version de modele et la rend active.
+
+    ``username``/``organisation_id`` : qui a lance cet entrainement (absent pour
+    un entrainement declenche sans session utilisateur, ex. cle API). Sert au
+    filtrage de GET /models : un operateur ne voit que ses propres modeles,
+    un admin voit tous ceux de son organisation (voir app/api/routes.py).
+    """
     dossier = dossier_modeles or settings.models_dir
     version = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     dossier_version = dossier / "registry" / version
@@ -65,6 +73,8 @@ def enregistrer_modele(
         "raison_selection": raison_selection,
         "resultats": resultats,
         "dataset": nom_dataset,
+        "username": username,
+        "organisation_id": organisation_id,
     }
 
     meta_json = json.dumps(meta, indent=2, ensure_ascii=False)
@@ -145,6 +155,22 @@ def activer_version(version: str, dossier_modeles: Path | None = None) -> dict[s
         dossier / "active.json",
     )
     return meta
+
+
+def supprimer_version(version: str, dossier_modeles: Path | None = None) -> None:
+    """Supprime une version du registre (dossier ``registry/<version>/``).
+
+    Ne touche jamais aux copies a plat (best_model.joblib, model_meta.json) ni
+    a active.json : l'appelant doit s'assurer que ce n'est pas la version
+    active avant d'appeler cette fonction (voir app/api/routes.py::delete_model).
+    """
+    dossier = dossier_modeles or settings.models_dir
+    dossier_version = dossier / "registry" / version
+    if not dossier_version.is_dir():
+        raise FileNotFoundError(f"Version introuvable dans le registre : {version}")
+    for enfant in dossier_version.iterdir():
+        enfant.unlink()
+    dossier_version.rmdir()
 
 
 def lister_versions(dossier_modeles: Path | None = None) -> list[str]:

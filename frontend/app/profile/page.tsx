@@ -40,6 +40,12 @@ export default function ProfilePage() {
             </div>
           </CardHeader>
           <CardContent className="space-y-2 text-sm">
+            {user.email && (
+              <div className="flex justify-between rounded-lg bg-muted/50 p-2.5">
+                <span className="text-muted-foreground">Email</span>
+                <span className="font-medium">{user.email}</span>
+              </div>
+            )}
             <div className="flex justify-between rounded-lg bg-muted/50 p-2.5">
               <span className="text-muted-foreground">Rôle</span>
               <span className="font-medium">{user.role}</span>

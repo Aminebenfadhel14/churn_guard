@@ -23,6 +23,23 @@ export interface Drift {
   n_colonnes_analysees: number
   colonnes: ColonneDrift[]
 }
+export interface ColonneManquante {
+  colonne: string
+  taux_manquant: number
+}
+export interface RepartitionClasse {
+  classe: string
+  pourcentage: number
+}
+export interface EquilibreClasses {
+  repartition: RepartitionClasse[]
+  niveau: 'equilibre' | 'modere' | 'fort'
+}
+export interface Qualite {
+  colonnes_manquantes: ColonneManquante[]
+  colonnes_critiques: string[]
+  equilibre_classes: EquilibreClasses | null
+}
 export interface Apercu {
   fichier: string
   lignes: number
@@ -32,6 +49,7 @@ export interface Apercu {
   features: string[]
   entrainement?: string
   drift?: Drift | null
+  qualite?: Qualite
 }
 export interface ResultatModele {
   nom: string

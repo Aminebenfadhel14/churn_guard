@@ -36,6 +36,9 @@ pydantic-settings>=2.3,<3.0    # config typée via variables d'environnement
 
 # ----- Authentification (sessions utilisateur du Retention Copilot web) -----
 pyjwt>=2.8,<3.0
+sqlalchemy>=2.0,<3.0
+alembic>=1.13,<2.0
+psycopg[binary]>=3.1,<4.0      # driver PostgreSQL (production) ; SQLite (dev local) est natif à Python
 
 # ----- Couche MCP -----
 fastmcp>=2.0,<3.0
