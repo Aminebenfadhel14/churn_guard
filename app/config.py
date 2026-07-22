@@ -35,7 +35,37 @@ class Settings(BaseSettings):
     # Cle de signature des tokens de session (JWT). A changer en production.
     jwt_secret_key: str = "change-me-please"
     jwt_expire_minutes: int = 1440  # 24h
+    # Duree de vie d'une session "se connecter en tant que" (admin -> employe,
+    # voir POST /auth/users/{username}/impersonate) : plus courte qu'une
+    # session normale, car c'est une session de support ponctuelle.
+    impersonation_expire_minutes: int = 30
+    # Ancien annuaire JSON (legacy) : conserve uniquement pour la migration
+    # unique vers la base de donnees, voir app/auth/migrate_json.py.
     users_file: Path = BASE_DIR / "users.json"
+
+    # ----- Base de donnees (comptes utilisateur multi-organisation) -----
+    # SQLite en local par defaut ; en production, pointer vers Postgres via
+    # CHURNGUARD_DATABASE_URL (ex: postgresql+psycopg://user:pwd@host/db).
+    database_url: str = f"sqlite:///{BASE_DIR / 'churnguard.db'}"
+
+    # ----- Code de verification (OTP) a la connexion -----
+    # Envoye par email lorsque l'utilisateur a une adresse renseignee (sinon
+    # la connexion reste a une seule etape). Voir app/auth/otp.py.
+    otp_length: int = 6
+    otp_expire_minutes: int = 10
+    otp_max_attempts: int = 5
+    otp_resend_cooldown_seconds: int = 60
+    # Duree de vie du jeton intermediaire emis apres verification du mot de
+    # passe, avant la verification du code (app/auth/tokens.py::creer_token_otp).
+    otp_challenge_expire_minutes: int = 10
+
+    # ----- Service d'envoi d'emails -----
+    # Le backend est en Python : l'envoi (nodemailer) est delegue a une route
+    # interne du frontend Next.js, appelee ici en HTTP avec un secret partage.
+    # Doit correspondre a INTERNAL_EMAIL_SECRET cote frontend (voir
+    # frontend/.env.local.example).
+    email_service_url: str = "http://127.0.0.1:3000/api/internal/send-email"
+    email_service_secret: str = "change-me-please"
 
     # ----- Chemins de travail -----
     data_dir: Path = BASE_DIR / "data"

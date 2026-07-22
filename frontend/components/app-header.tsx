@@ -12,6 +12,7 @@ import {
   Upload,
   User,
   Users,
+  UserCog,
 } from 'lucide-react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
@@ -53,17 +54,41 @@ const NAV = [
 export function AppHeader() {
   const pathname = usePathname()
   const router = useRouter()
-  const { user, logout } = useAuth()
+  const { user, logout, impersonating, stopImpersonating } = useAuth()
   const [open, setOpen] = useState(false)
 
   const isActive = (href: string) =>
     href === '/' ? pathname === '/' : pathname.startsWith(href)
 
-  // Pas de nav/menu utilisateur sur l'écran de connexion.
-  if (pathname === '/login') return null
+  // Pas de nav/menu utilisateur sur les écrans de connexion/inscription.
+  if (pathname === '/login' || pathname === '/signup') return null
+
+  const nav = user?.role === 'admin' ? [...NAV, { href: '/team', label: 'Équipe', icon: Users }] : NAV
+
+  const revenirAuCompteAdmin = async () => {
+    await stopImpersonating()
+    router.push('/team')
+  }
 
   return (
-    <header className="sticky top-0 z-40 border-b border-border bg-background/85 backdrop-blur supports-[backdrop-filter]:bg-background/70">
+    <div className="sticky top-0 z-40">
+      {impersonating && (
+        <div className="flex items-center justify-center gap-3 bg-warning px-4 py-2 text-sm font-medium text-warning-foreground">
+          <UserCog className="size-4" />
+          <span>
+            Connecté en tant que <strong>{user?.nom_complet}</strong> — session de support temporaire
+          </span>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 bg-background"
+            onClick={revenirAuCompteAdmin}
+          >
+            Revenir à mon compte
+          </Button>
+        </div>
+      )}
+      <header className="border-b border-border bg-background/85 backdrop-blur supports-[backdrop-filter]:bg-background/70">
       <div className="mx-auto flex h-16 max-w-7xl items-center gap-4 px-4 sm:px-6 lg:px-8">
         <Link href="/" className="flex items-center gap-2.5">
           <span className="flex size-9 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-sm">
@@ -75,7 +100,7 @@ export function AppHeader() {
         </Link>
 
         <nav className="ml-4 hidden items-center gap-1 md:flex">
-          {NAV.map((item) => {
+          {nav.map((item) => {
             const Icon = item.icon
             return (
               <Link
@@ -129,7 +154,7 @@ export function AppHeader() {
                 <DropdownMenuItem onClick={() => router.push('/profile')}>
                   <User className="size-4" /> Profil
                 </DropdownMenuItem>
-                <DropdownMenuItem>
+                <DropdownMenuItem onClick={() => router.push('/settings')}>
                   <Settings className="size-4" /> Paramètres
                 </DropdownMenuItem>
               </DropdownMenuGroup>
@@ -154,7 +179,7 @@ export function AppHeader() {
 
       {open && (
         <nav className="border-t border-border bg-background px-4 py-2 md:hidden">
-          {NAV.map((item) => {
+          {nav.map((item) => {
             const Icon = item.icon
             return (
               <Link
@@ -175,6 +200,7 @@ export function AppHeader() {
           })}
         </nav>
       )}
-    </header>
+      </header>
+    </div>
   )
 }

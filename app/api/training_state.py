@@ -56,11 +56,18 @@ def entrainement_en_cours() -> bool:
         return _etat["statut"] == "en_cours"
 
 
-def _executer(chemin: Path) -> None:
-    """Exécute l'entraînement et met à jour l'état (appelé dans un thread)."""
+def _executer(chemin: Path, username: str | None = None, organisation_id: int | None = None) -> None:
+    """Exécute l'entraînement et met à jour l'état (appelé dans un thread).
+
+    ``username``/``organisation_id`` sont passés en valeurs simples (pas via
+    une dépendance FastAPI) car ce thread n'a pas accès à la requête HTTP
+    d'origine — voir app/api/routes.py::train_start pour leur résolution.
+    """
     try:
         df: pd.DataFrame = charger_dataset(chemin)
-        res = entrainer_et_selectionner(df, nom_dataset=chemin.name)
+        res = entrainer_et_selectionner(
+            df, nom_dataset=chemin.name, username=username, organisation_id=organisation_id
+        )
 
         # Invalide les caches pour que l'API serve immédiatement le nouveau modèle.
         charger_modele.cache_clear()
@@ -84,7 +91,9 @@ def _executer(chemin: Path) -> None:
         traceback.print_exc()
 
 
-def lancer_entrainement(chemin: Path) -> dict[str, Any]:
+def lancer_entrainement(
+    chemin: Path, username: str | None = None, organisation_id: int | None = None
+) -> dict[str, Any]:
     """Démarre un entraînement en arrière-plan sur le fichier donné.
 
     Retourne immédiatement l'état initial. Si un entraînement est déjà en cours,
@@ -103,6 +112,6 @@ def lancer_entrainement(chemin: Path) -> dict[str, Any]:
         termine_a=None,
     )
 
-    thread = threading.Thread(target=_executer, args=(chemin,), daemon=True)
+    thread = threading.Thread(target=_executer, args=(chemin, username, organisation_id), daemon=True)
     thread.start()
     return etat_courant()

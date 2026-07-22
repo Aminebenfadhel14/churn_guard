@@ -21,6 +21,9 @@ ENV/
 *.local
 users.json
 
+# ===== Base de donnees (dev local SQLite) =====
+churnguard.db
+
 # ===== Modèles & artefacts ML =====
 *.pkl
 *.joblib

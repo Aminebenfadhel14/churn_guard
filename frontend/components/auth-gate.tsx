@@ -5,16 +5,19 @@ import { usePathname, useRouter } from 'next/navigation'
 import { useEffect, type ReactNode } from 'react'
 import { useAuth } from '@/lib/auth'
 
+const PAGES_PUBLIQUES = ['/login', '/signup']
+
 /** Redirige vers /login tant qu'aucune session valide n'existe. */
 export function AuthGate({ children }: { children: ReactNode }) {
   const { status } = useAuth()
   const pathname = usePathname()
   const router = useRouter()
+  const pagePublique = PAGES_PUBLIQUES.includes(pathname)
 
   useEffect(() => {
-    if (status === 'unauthenticated' && pathname !== '/login') router.replace('/login')
-    if (status === 'authenticated' && pathname === '/login') router.replace('/')
-  }, [status, pathname, router])
+    if (status === 'unauthenticated' && !pagePublique) router.replace('/login')
+    if (status === 'authenticated' && pagePublique) router.replace('/')
+  }, [status, pagePublique, router])
 
   if (status === 'loading') {
     return (
@@ -28,7 +31,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
   }
 
   // Redirection en cours : on n'affiche pas le contenu protégé avant qu'elle n'ait lieu.
-  if (status === 'unauthenticated' && pathname !== '/login') return null
+  if (status === 'unauthenticated' && !pagePublique) return null
 
   return <>{children}</>
 }
