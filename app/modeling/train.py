@@ -209,6 +209,7 @@ def entrainer_et_selectionner(
     random_state: int = 42,
     modeles: dict[str, Any] | None = None,
     dossier_modeles: Path | None = None,
+    dossier_actif: Path | None = None,
     nom_dataset: str | None = None,
     username: str | None = None,
     organisation_id: int | None = None,
@@ -298,19 +299,22 @@ def entrainer_et_selectionner(
         pipe_final, schema_complet,
         [r.as_dict() for r in resultats], nom_best, classes, raison_selection,
         dossier_modeles=dossier_modeles,
+        dossier_actif=dossier_actif,
         reference_drift=reference_drift,
         nom_dataset=nom_dataset,
         username=username,
         organisation_id=organisation_id,
     )
 
-    dossier = dossier_modeles or settings.models_dir
+    # Les fichiers du modele actif a plat vivent dans le dossier actif (dossier
+    # personnel de l'operateur), pas necessairement dans le dossier du registre.
+    dossier_flat = dossier_actif or dossier_modeles or settings.models_dir
     return ResultatEntrainement(
         meilleur_modele=nom_best,
         resultats=resultats,
         raison_selection=raison_selection,
-        chemin_modele=str(dossier / "best_model.joblib"),
-        chemin_meta=str(dossier / "model_meta.json"),
+        chemin_modele=str(dossier_flat / "best_model.joblib"),
+        chemin_meta=str(dossier_flat / "model_meta.json"),
         version=meta["version"],
     )
 

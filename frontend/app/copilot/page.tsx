@@ -52,30 +52,46 @@ function valeurInitiale(f: Feature): string {
 
 export default function CopilotPage() {
   const { apiFetch } = useAuth()
-  const { state, patch } = useCopilotState()
+  const { state, patch, setState } = useCopilotState()
   const { schema, values, erreurSchema, mode, messages, input, sending, running, erreurExpress, res } = state
   const finRef = useRef<HTMLDivElement>(null)
 
+  // (Re)charge le schéma à chaque visite : le modèle actif a pu changer
+  // (nouvel entraînement, bascule) depuis la dernière fois. Sinon le formulaire
+  // garde les champs de l'ancien modèle et les appels échouent.
   useEffect(() => {
-    if (schema) return // déjà chargé (retour sur la page) : on ne réinitialise pas le formulaire.
+    let annule = false
     void (async () => {
       try {
         const rep = await apiFetch('/schema')
         if (!rep.ok)
-          throw new Error('Aucun modèle entraîné (lance un entraînement depuis Upload).')
+          throw new Error('Aucun modèle entraîné (importez un dataset puis entraînez).')
         const s: CopilotSchema = await rep.json()
-        const init: Record<string, string> = {}
-        s.features.forEach((f) => (init[f.nom] = valeurInitiale(f)))
-        patch({ schema: s, values: init })
+        if (annule) return
+        setState((prev) => {
+          const memeSchema =
+            prev.schema != null &&
+            prev.schema.features.length === s.features.length &&
+            prev.schema.features.every((f, i) => f.nom === s.features[i]?.nom)
+          const values = memeSchema
+            ? prev.values
+            : Object.fromEntries(s.features.map((f) => [f.nom, valeurInitiale(f)]))
+          return { ...prev, schema: s, values, erreurSchema: null }
+        })
       } catch (e) {
-        patch({
+        if (annule) return
+        setState((prev) => ({
+          ...prev,
           erreurSchema:
             e instanceof Error && e.message.includes('fetch')
               ? "Impossible de joindre l'API (uvicorn app.main:app)."
               : (e as Error).message,
-        })
+        }))
       }
     })()
+    return () => {
+      annule = true
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 

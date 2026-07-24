@@ -19,6 +19,9 @@ export interface AuthUser {
   email: string | null
   nom_complet: string
   role: string
+  /** Vrai tant que l'utilisateur n'a pas remplacé le mot de passe temporaire
+   * attribué par un admin : force la page /change-password (voir AuthGate). */
+  must_change_password: boolean
 }
 
 type AuthStatus = 'loading' | 'authenticated' | 'unauthenticated'

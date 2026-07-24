@@ -43,16 +43,22 @@ class Utilisateur(Base):
     mot_de_passe_hash: Mapped[str] = mapped_column(String(255))
     nom_complet: Mapped[str] = mapped_column(String(255))
     role: Mapped[str] = mapped_column(String(50), default="operateur")
+    # Vrai tant que l'utilisateur n'a pas remplace le mot de passe temporaire
+    # attribue par un admin (creation ou reinitialisation). Force une page de
+    # changement a la premiere connexion - voir frontend/components/auth-gate.tsx
+    # et app/api/routes.py::modifier_mon_compte.
+    mot_de_passe_temporaire: Mapped[bool] = mapped_column(default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_maintenant)
 
     organisation: Mapped["Organisation"] = relationship(back_populates="utilisateurs")
 
-    def public(self) -> dict[str, str | None]:
+    def public(self) -> dict[str, str | bool | None]:
         return {
             "username": self.username,
             "email": self.email,
             "nom_complet": self.nom_complet,
             "role": self.role,
+            "must_change_password": self.mot_de_passe_temporaire,
         }
 
 

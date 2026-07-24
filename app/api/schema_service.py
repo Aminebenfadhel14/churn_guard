@@ -10,20 +10,22 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from app.config import settings
+# Le répertoire du modèle actif est résolu par requête (modèle personnel de
+# l'opérateur, ou racine pour admin/clé API) : on réutilise le même ContextVar
+# que le chargeur de modèle pour rester cohérent (voir app/modeling/predict.py).
+from app.modeling.predict import _rep
 
 
 def charger_schema_actif() -> dict[str, Any]:
-    """Charge le schéma du modèle actif (``models/schema.json``).
+    """Charge le schéma du modèle actif (``<dossier actif>/schema.json``).
 
     Raises:
         FileNotFoundError: Si aucun modèle n'a encore été entraîné.
     """
-    chemin = settings.models_dir / "schema.json"
+    chemin = _rep() / "schema.json"
     if not chemin.exists():
         raise FileNotFoundError(
-            "Aucun schéma actif. Entraîne d'abord un modèle : "
-            "`python scripts/train_model.py`."
+            "Aucun schéma actif. Importez un dataset puis lancez un entraînement."
         )
     return json.loads(chemin.read_text(encoding="utf-8"))
 
@@ -35,7 +37,7 @@ def charger_drift_reference() -> dict[str, Any] | None:
     entraîné avant l'introduction de la détection de drift, ou aucun modèle
     actif) : le drift est alors simplement ignoré, jamais bloquant.
     """
-    chemin = settings.models_dir / "drift_reference.json"
+    chemin = _rep() / "drift_reference.json"
     if not chemin.exists():
         return None
     try:

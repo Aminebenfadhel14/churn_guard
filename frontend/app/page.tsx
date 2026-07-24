@@ -7,6 +7,7 @@ import {
   RiskDistributionChart,
   ScoreHistogramChart,
 } from '@/components/dashboard/charts'
+import { DashboardOnboarding } from '@/components/dashboard/empty-state'
 import { KpiCards } from '@/components/dashboard/kpi-cards'
 import { RiskBadge } from '@/components/risk-badge'
 import {
@@ -27,6 +28,9 @@ import {
 import { useAuth } from '@/lib/auth'
 
 interface Dashboard {
+  // Vrai quand l'utilisateur n'a pas encore de dataset : on affiche l'onboarding
+  // au lieu des agrégats (voir DashboardOnboarding).
+  empty?: boolean
   dataset: string
   cible: string
   stats: {
@@ -91,15 +95,16 @@ export default function DashboardPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const stats = d
-    ? {
-        totalClients: d.stats.total,
-        atRiskCount: d.stats.at_risk_count,
-        atRiskPct: d.stats.at_risk_pct,
-        avgChurnRate: d.stats.avg_churn_rate,
-        avgRiskScore: d.stats.avg_score,
-      }
-    : null
+  const stats =
+    d && !d.empty && d.stats
+      ? {
+          totalClients: d.stats.total,
+          atRiskCount: d.stats.at_risk_count,
+          atRiskPct: d.stats.at_risk_pct,
+          avgChurnRate: d.stats.avg_churn_rate,
+          avgRiskScore: d.stats.avg_score,
+        }
+      : null
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
@@ -110,7 +115,7 @@ export default function DashboardPage() {
         <p className="mt-1 text-muted-foreground">
           Vue d&apos;ensemble des risques d&apos;attrition, calculée sur votre
           dataset.
-          {d && (
+          {d && !d.empty && (
             <>
               {' '}
               <span className="text-foreground">{d.dataset}</span> · cible :{' '}
@@ -138,6 +143,8 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
       )}
+
+      {d?.empty && !loading && !error && <DashboardOnboarding />}
 
       {d && stats && !loading && (
         <>

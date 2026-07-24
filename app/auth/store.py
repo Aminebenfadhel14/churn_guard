@@ -63,8 +63,14 @@ def creer_utilisateur(
     nom_complet: str,
     role: str = "operateur",
     email: str | None = None,
+    mot_de_passe_temporaire: bool = False,
 ) -> Utilisateur:
-    """Ajoute un compte, rattache a une organisation existante."""
+    """Ajoute un compte, rattache a une organisation existante.
+
+    ``mot_de_passe_temporaire`` marque le mot de passe comme provisoire :
+    l'utilisateur sera force de le changer a sa premiere connexion (comptes
+    crees par un admin, voir app/api/routes.py::creer_employe).
+    """
     utilisateur = Utilisateur(
         organisation_id=organisation_id,
         username=username,
@@ -72,6 +78,7 @@ def creer_utilisateur(
         mot_de_passe_hash=hacher_mot_de_passe(mot_de_passe),
         nom_complet=nom_complet,
         role=role,
+        mot_de_passe_temporaire=mot_de_passe_temporaire,
     )
     db.add(utilisateur)
     db.commit()
@@ -114,10 +121,14 @@ def modifier_utilisateur(
     role: str | None = None,
     mot_de_passe: str | None = None,
     email: str | None = None,
+    mot_de_passe_temporaire: bool | None = None,
 ) -> Utilisateur | None:
     """Met a jour un compte de l'organisation donnee. Renvoie None si introuvable.
 
-    Seuls les champs fournis (non None) sont modifies.
+    Seuls les champs fournis (non None) sont modifies. ``mot_de_passe_temporaire``
+    est explicite (et non deduit du changement de mot de passe) car sa valeur
+    depend de l'appelant : un admin qui reinitialise le remet a True, un
+    utilisateur qui change lui-meme le remet a False.
     """
     utilisateur = (
         db.query(Utilisateur)
@@ -134,6 +145,8 @@ def modifier_utilisateur(
         utilisateur.mot_de_passe_hash = hacher_mot_de_passe(mot_de_passe)
     if email is not None:
         utilisateur.email = email
+    if mot_de_passe_temporaire is not None:
+        utilisateur.mot_de_passe_temporaire = mot_de_passe_temporaire
     db.commit()
     db.refresh(utilisateur)
     return utilisateur

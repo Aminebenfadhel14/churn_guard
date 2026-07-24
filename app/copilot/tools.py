@@ -7,6 +7,7 @@ La configuration (URL de l'API, clé) vient de ``app.config.settings``.
 
 from __future__ import annotations
 
+from contextvars import ContextVar
 from typing import Any
 
 import httpx
@@ -16,16 +17,35 @@ from app.config import settings
 # Délai par défaut ; l'entraînement n'est pas appelé ici, ces endpoints sont rapides.
 TIMEOUT_DEFAUT = 30.0
 
+# Token de session de l'utilisateur courant, à propager aux appels HTTP internes
+# du copilot : sans lui, les sous-requêtes (/predict, /dashboard…) seraient
+# résolues en accès clé API (modèle global) et un opérateur verrait les données
+# d'un autre. On le fixe depuis l'endpoint copilot (même thread, synchrone).
+_token_session: ContextVar[str | None] = ContextVar("copilot_token_session", default=None)
+
+
+def definir_token_session(token: str | None) -> None:
+    """Fixe le token de session à transmettre aux appels d'outils du copilot."""
+    _token_session.set(token)
+
 
 class OutilChurnGuardError(RuntimeError):
     """Erreur lors de l'appel à un endpoint ChurnGuard (réseau ou statut != 200)."""
 
 
 def _headers() -> dict[str, str]:
-    """En-têtes HTTP, avec la clé API si elle est configurée."""
+    """En-têtes HTTP : clé API si configurée + token de session s'il est présent.
+
+    Le token de session (Bearer) fait que les endpoints appelés résolvent le
+    bon utilisateur et servent donc son modèle personnel (isolation par
+    opérateur), et non le modèle global.
+    """
     entetes = {"Content-Type": "application/json"}
     if settings.api_key and settings.api_key != "change-me-please":
         entetes["x-api-key"] = settings.api_key
+    token = _token_session.get()
+    if token:
+        entetes["Authorization"] = f"Bearer {token}"
     return entetes
 
 

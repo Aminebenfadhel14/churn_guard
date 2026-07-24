@@ -49,7 +49,7 @@ function valeurInitiale(f: Feature): string {
 
 export default function PredictPage() {
   const { apiFetch } = useAuth()
-  const { state, patch } = usePredictState()
+  const { state, patch, setState } = usePredictState()
   const {
     schema,
     values,
@@ -66,11 +66,13 @@ export default function PredictPage() {
     destinataire,
   } = state
 
+  // On (re)charge le schéma à chaque visite : le modèle actif a pu changer
+  // (nouvel entraînement, bascule de modèle) depuis la dernière fois. Sans ça,
+  // le formulaire garde en mémoire les champs de l'ancien modèle et la
+  // prédiction échoue avec « Champ requis manquant » pour toutes les colonnes
+  // du nouveau modèle.
   useEffect(() => {
-    if (schema) {
-      patch({ chargement: false }) // déjà chargé (retour sur la page)
-      return
-    }
+    let annule = false
     ;(async () => {
       try {
         const rep = await apiFetch('/schema')
@@ -78,25 +80,40 @@ export default function PredictPage() {
           const d = await rep.json().catch(() => ({}))
           throw new Error(
             rep.status === 503
-              ? 'Aucun modèle entraîné. Lance `python scripts/train_model.py`.'
+              ? 'Aucun modèle entraîné. Importez un dataset puis lancez un entraînement.'
               : d.detail ?? `Erreur ${rep.status}`,
           )
         }
         const s: PredictSchema = await rep.json()
-        const init: Record<string, string> = {}
-        s.features.forEach((f) => (init[f.nom] = valeurInitiale(f)))
-        patch({ schema: s, values: init })
+        if (annule) return
+        setState((prev) => {
+          // Conserve la saisie en cours seulement si le schéma (donc le modèle
+          // actif) est identique ; sinon on repart des valeurs initiales du
+          // nouveau schéma.
+          const memeSchema =
+            prev.schema != null &&
+            prev.schema.features.length === s.features.length &&
+            prev.schema.features.every((f, i) => f.nom === s.features[i]?.nom)
+          const values = memeSchema
+            ? prev.values
+            : Object.fromEntries(s.features.map((f) => [f.nom, valeurInitiale(f)]))
+          return { ...prev, schema: s, values, erreurSchema: null, chargement: false }
+        })
       } catch (e) {
-        patch({
+        if (annule) return
+        setState((prev) => ({
+          ...prev,
           erreurSchema:
             e instanceof Error && e.message.includes('fetch')
               ? "Impossible de joindre l'API (uvicorn app.main:app)."
               : (e as Error).message,
-        })
-      } finally {
-        patch({ chargement: false })
+          chargement: false,
+        }))
       }
     })()
+    return () => {
+      annule = true
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
