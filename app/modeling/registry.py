@@ -45,6 +45,7 @@ def enregistrer_modele(
     raison_selection: str = "",
     *,
     dossier_modeles: Path | None = None,
+    dossier_actif: Path | None = None,
     reference_drift: dict[str, Any] | None = None,
     nom_dataset: str | None = None,
     username: str | None = None,
@@ -56,8 +57,18 @@ def enregistrer_modele(
     un entrainement declenche sans session utilisateur, ex. cle API). Sert au
     filtrage de GET /models : un operateur ne voit que ses propres modeles,
     un admin voit tous ceux de son organisation (voir app/api/routes.py).
+
+    Le **registre** (``registry/<version>/``) est ecrit sous ``dossier_modeles``
+    (racine partagee par defaut) : ainsi l'admin voit tous les modeles de son
+    organisation. Les fichiers du modele **actif** a plat (best_model.joblib,
+    schema.json, model_meta.json, drift_reference.json) et ``active.json`` sont
+    ecrits sous ``dossier_actif`` (par defaut = ``dossier_modeles``) : pour un
+    operateur, c'est son dossier personnel, ce qui isole son modele actif sans
+    toucher a celui de l'admin.
     """
     dossier = dossier_modeles or settings.models_dir
+    dossier_flat = dossier_actif or dossier
+    dossier_flat.mkdir(parents=True, exist_ok=True)
     version = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     dossier_version = dossier / "registry" / version
     dossier_version.mkdir(parents=True, exist_ok=True)
@@ -86,11 +97,11 @@ def enregistrer_modele(
         dossier_version / "meta.json",
     )
 
-    _remplacer_atomique(lambda t: joblib.dump(pipeline, t), dossier / "best_model.joblib")
-    _remplacer_atomique(schema.sauvegarder, dossier / "schema.json")
+    _remplacer_atomique(lambda t: joblib.dump(pipeline, t), dossier_flat / "best_model.joblib")
+    _remplacer_atomique(schema.sauvegarder, dossier_flat / "schema.json")
     _remplacer_atomique(
         lambda t: t.write_text(meta_json, encoding="utf-8"),
-        dossier / "model_meta.json",
+        dossier_flat / "model_meta.json",
     )
 
     if reference_drift is not None:
@@ -101,7 +112,7 @@ def enregistrer_modele(
         )
         _remplacer_atomique(
             lambda t: t.write_text(reference_json, encoding="utf-8"),
-            dossier / "drift_reference.json",
+            dossier_flat / "drift_reference.json",
         )
 
     _remplacer_atomique(
@@ -109,19 +120,27 @@ def enregistrer_modele(
             json.dumps({"version": version, "date": meta["date"]}, indent=2),
             encoding="utf-8",
         ),
-        dossier / "active.json",
+        dossier_flat / "active.json",
     )
     return meta
 
 
-def activer_version(version: str, dossier_modeles: Path | None = None) -> dict[str, Any]:
+def activer_version(
+    version: str,
+    dossier_actif: Path | None = None,
+    dossier_modeles: Path | None = None,
+) -> dict[str, Any]:
     """Rend active une version deja presente dans le registre, sans re-entrainer.
 
-    Recopie les fichiers de registry/<version>/ vers les copies a plat
-    (best_model.joblib, schema.json, model_meta.json et si present
-    drift_reference.json) puis met a jour active.json, en ecritures atomiques.
+    Recopie les fichiers de ``registry/<version>/`` (registre **partage** a la
+    racine, ``dossier_modeles``) vers les copies a plat + ``active.json`` de
+    ``dossier_actif`` (par defaut = racine). Pour un operateur, ``dossier_actif``
+    est son dossier personnel : il bascule ainsi son propre modele actif sans
+    toucher a celui de l'admin. Ecritures atomiques.
     """
     dossier = dossier_modeles or settings.models_dir
+    dossier_flat = dossier_actif or dossier
+    dossier_flat.mkdir(parents=True, exist_ok=True)
     dossier_version = dossier / "registry" / version
     if not dossier_version.is_dir():
         raise FileNotFoundError(f"Version introuvable dans le registre : {version}")
@@ -137,13 +156,13 @@ def activer_version(version: str, dossier_modeles: Path | None = None) -> dict[s
         contenu = src.read_bytes()
         _remplacer_atomique(lambda t: t.write_bytes(contenu), dst)
 
-    _copier(src_model, dossier / "best_model.joblib")
-    _copier(src_schema, dossier / "schema.json")
-    _copier(src_meta, dossier / "model_meta.json")
+    _copier(src_model, dossier_flat / "best_model.joblib")
+    _copier(src_schema, dossier_flat / "schema.json")
+    _copier(src_meta, dossier_flat / "model_meta.json")
 
     src_drift = dossier_version / "drift_reference.json"
     if src_drift.exists():
-        _copier(src_drift, dossier / "drift_reference.json")
+        _copier(src_drift, dossier_flat / "drift_reference.json")
 
     meta = json.loads(src_meta.read_text(encoding="utf-8"))
     date = meta.get("date", datetime.now(timezone.utc).isoformat())
@@ -152,7 +171,7 @@ def activer_version(version: str, dossier_modeles: Path | None = None) -> dict[s
             json.dumps({"version": version, "date": date}, indent=2),
             encoding="utf-8",
         ),
-        dossier / "active.json",
+        dossier_flat / "active.json",
     )
     return meta
 

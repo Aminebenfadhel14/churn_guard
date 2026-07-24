@@ -60,8 +60,10 @@ export function AppHeader() {
   const isActive = (href: string) =>
     href === '/' ? pathname === '/' : pathname.startsWith(href)
 
-  // Pas de nav/menu utilisateur sur les écrans de connexion/inscription.
-  if (pathname === '/login' || pathname === '/signup') return null
+  // Pas de nav/menu utilisateur sur les écrans de connexion/inscription, ni sur
+  // le changement de mot de passe temporaire forcé (aucune navigation possible
+  // tant que le mot de passe n'est pas remplacé).
+  if (pathname === '/login' || pathname === '/signup' || pathname === '/change-password') return null
 
   const nav = user?.role === 'admin' ? [...NAV, { href: '/team', label: 'Équipe', icon: Users }] : NAV
 

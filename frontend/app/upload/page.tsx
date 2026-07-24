@@ -3,6 +3,7 @@
 import {
   AlertTriangle,
   CheckCircle2,
+  Database,
   FileUp,
   Loader2,
   ShieldCheck,
@@ -11,7 +12,7 @@ import {
   X,
 } from 'lucide-react'
 import Link from 'next/link'
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button, buttonVariants } from '@/components/ui/button'
@@ -34,6 +35,24 @@ import { useAuth } from '@/lib/auth'
 import { type Apercu, type Drift, type Entrainement, type Qualite, useUploadState } from '@/lib/session-state'
 
 const EXT_OK = ['.csv', '.xlsx', '.xls', '.parquet']
+
+interface ModeleActif {
+  version: string
+  label: string
+  cible: string | null
+  algorithme: string | null
+  n_features: number
+  date: string | null
+  actif: boolean
+}
+
+function formatDateModele(iso: string | null): string {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime())
+    ? '—'
+    : d.toLocaleDateString('fr-FR', { day: '2-digit', month: 'long', year: 'numeric' })
+}
 
 interface EtatEntrainement {
   statut: 'idle' | 'en_cours' | 'termine' | 'echec'
@@ -58,6 +77,31 @@ export default function UploadPage() {
 
   const { state, patch } = useUploadState()
   const { fichier, uploading, apercu, entrainant, progression, resultat } = state
+
+  // Modèle/dataset déjà entraîné par l'utilisateur (persisté côté serveur) : on
+  // le recharge à l'ouverture pour montrer que son travail est bien enregistré,
+  // même après un rafraîchissement de la page (l'état de la page, lui, est en
+  // mémoire seulement — voir lib/session-state.tsx).
+  const [modeleActuel, setModeleActuel] = useState<ModeleActif | null>(null)
+
+  const chargerModeleActuel = async () => {
+    try {
+      const rep = await apiFetch('/models')
+      if (!rep.ok) return
+      const d = await rep.json()
+      const liste: ModeleActif[] = d.models ?? []
+      // Le modèle actif en priorité, sinon le plus récent de la liste.
+      const actif = liste.find((m) => m.actif) ?? liste[0] ?? null
+      setModeleActuel(actif)
+    } catch {
+      /* silencieux : simple information, jamais bloquant */
+    }
+  }
+
+  useEffect(() => {
+    void chargerModeleActuel()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Empêche deux boucles de suivi simultanées.
   const suiviActif = useRef(false)
@@ -85,6 +129,7 @@ export default function UploadPage() {
 
         if (etat.statut === 'termine' && etat.resultat) {
           patch({ resultat: etat.resultat })
+          void chargerModeleActuel() // met à jour la carte « modèle actuel »
           toast.success('Modèle entraîné et activé', {
             description: etat.resultat.meilleur_modele,
           })
@@ -187,6 +232,42 @@ export default function UploadPage() {
           Vérifiez-le, puis lancez l&apos;entraînement quand vous êtes prêt.
         </p>
       </div>
+
+      {/* Rappel du dataset/modèle déjà entraîné : montre que le travail est bien
+          enregistré (persisté côté serveur), même après un rafraîchissement. */}
+      {modeleActuel && (
+        <Card className="mb-4 border-success/30 bg-success/5">
+          <CardContent className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-start gap-3">
+              <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-success/15 text-success">
+                <Database className="size-5" />
+              </span>
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="font-medium">{modeleActuel.label}</span>
+                  {modeleActuel.actif && (
+                    <Badge className="bg-success text-success-foreground">Actif</Badge>
+                  )}
+                </div>
+                <p className="mt-0.5 text-sm text-muted-foreground">
+                  Votre dataset et votre modèle sont enregistrés.
+                  {modeleActuel.algorithme ? ` Modèle : ${modeleActuel.algorithme}.` : ''}
+                  {modeleActuel.cible ? ` Cible : ${modeleActuel.cible}.` : ''}
+                  {` ${modeleActuel.n_features} variables · entraîné le ${formatDateModele(modeleActuel.date)}.`}
+                </p>
+              </div>
+            </div>
+            <div className="flex shrink-0 gap-2">
+              <Link href="/" className={buttonVariants({ variant: 'outline', size: 'sm' })}>
+                Voir le dashboard
+              </Link>
+              <Link href="/predict" className={buttonVariants({ size: 'sm' })}>
+                Prédire
+              </Link>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader>

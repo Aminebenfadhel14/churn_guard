@@ -63,7 +63,13 @@ from app.emailing import (
 from app.ingestion import analyser_qualite, charger_dataset
 from app.ingestion.schema_registry import construire_schema
 from app.explainability import expliquer_prediction
-from app.modeling.predict import charger_meta, charger_modele, predire
+from app.modeling.predict import (
+    charger_meta,
+    charger_modele,
+    definir_repertoire_modeles,
+    predire,
+    vider_caches_modele,
+)
 from app.monitoring.drift import detecter_drift
 from app.recommendations import generer_recommandations_expertes, recommandations_de_secours
 from app.recommendations import cache as recommandations_cache
@@ -165,6 +171,90 @@ def _masquer_email(email: str) -> str:
     return f"{masque}@{domaine}"
 
 
+# ----- Isolation des datasets/modeles par utilisateur -----
+# Un operateur travaille sur SON propre dataset partout (dashboard, clients,
+# predictions) : ses fichiers uploades et son modele actif vivent dans un
+# sous-dossier a son nom. L'admin et l'acces programmatique (cle API/MCP)
+# gardent la racine partagee (modele global, comportement historique) : c'est
+# ce qui garantit "ne touche pas l'admin". Le registre des modeles, lui, reste
+# partage a la racine (voir app/modeling/registry.py) pour que l'admin voie
+# tous les modeles de son organisation.
+_CARACT_SUR = re.compile(r"[^A-Za-z0-9._@-]")
+
+
+def _slug_utilisateur(username: str) -> str:
+    """Nom de dossier sur pour un username (souvent un email)."""
+    return _CARACT_SUR.sub("_", username)
+
+
+def _est_portee_globale(utilisateur: Utilisateur | None) -> bool:
+    """Vrai si l'utilisateur partage l'espace global (admin ou acces sans session)."""
+    return utilisateur is None or utilisateur.role == "admin"
+
+
+def repertoire_actif_pour(utilisateur: Utilisateur | None) -> Path:
+    """Dossier du modele actif (fichiers a plat + active.json) pour cet utilisateur."""
+    if _est_portee_globale(utilisateur):
+        return settings.models_dir
+    return settings.models_dir / "users" / _slug_utilisateur(utilisateur.username)
+
+
+def repertoire_donnees_pour(utilisateur: Utilisateur | None) -> Path:
+    """Dossier des datasets uploades pour cet utilisateur."""
+    if _est_portee_globale(utilisateur):
+        return settings.data_dir
+    return settings.data_dir / "users" / _slug_utilisateur(utilisateur.username)
+
+
+def _garantir_modele_actif_operateur(utilisateur: Utilisateur | None) -> None:
+    """Migration douce : si un operateur n'a pas encore de modele actif personnel
+    mais possede deja des modeles dans le registre partage (typiquement entraines
+    avant l'isolation par utilisateur, quand tout etait global), on materialise
+    son dernier modele dans son dossier personnel. Il retrouve ainsi ses donnees
+    sur le dashboard / la prediction sans avoir a re-entrainer.
+    """
+    if _est_portee_globale(utilisateur):
+        return
+    rep = repertoire_actif_pour(utilisateur)
+    if (rep / "best_model.joblib").exists():
+        return
+    from app.modeling.registry import activer_version, lister_versions
+
+    for version in lister_versions():  # versions recentes d'abord
+        meta_path = settings.models_dir / "registry" / version / "meta.json"
+        if not meta_path.exists():
+            continue
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            continue
+        if meta.get("username") == utilisateur.username:
+            try:
+                activer_version(version, dossier_actif=rep)
+            except Exception:  # noqa: BLE001 — jamais bloquant : au pire, etat vide
+                pass
+            return
+
+
+def _activer_contexte_modele(utilisateur: Utilisateur | None) -> None:
+    """Fixe, pour la requete courante, le dossier du modele actif de l'utilisateur.
+
+    A appeler en tete de chaque endpoint qui lit le modele/schema actif, pour
+    que les chargeurs (app/modeling/predict.py, app/api/schema_service.py)
+    servent le modele personnel de l'operateur (et non celui d'un autre).
+    Migre au passage un operateur dont les modeles precedent l'isolation.
+    """
+    definir_repertoire_modeles(repertoire_actif_pour(utilisateur))
+    _garantir_modele_actif_operateur(utilisateur)
+
+
+def _a_un_modele_actif() -> bool:
+    """Vrai si un modele actif existe dans le dossier resolu pour la requete."""
+    from app.modeling.predict import _rep
+
+    return (_rep() / "best_model.joblib").exists()
+
+
 @router.post("/auth/login")
 def login(payload: dict[str, Any] = Body(...), db: Session = Depends(get_db)) -> dict[str, Any]:
     """Authentifie un utilisateur.
@@ -183,6 +273,19 @@ def login(payload: dict[str, Any] = Body(...), db: Session = Depends(get_db)) ->
     utilisateur = authentifier(db, identifiant, mot_de_passe)
     if utilisateur is None:
         raise HTTPException(status_code=401, detail="Identifiants invalides.")
+
+    # Mot de passe temporaire : connexion directe (sans code OTP), l'utilisateur
+    # sera immediatement force de choisir un nouveau mot de passe cote frontend
+    # (must_change_password=True -> AuthGate redirige vers /change-password).
+    # C'est tout l'interet d'un mot de passe temporaire : mener directement au
+    # changement, sans etape intermediaire.
+    if utilisateur.mot_de_passe_temporaire:
+        return {
+            "otp_required": False,
+            "access_token": creer_token(utilisateur.username),
+            "token_type": "bearer",
+            "user": utilisateur.public(),
+        }
 
     if not utilisateur.email:
         return {
@@ -256,7 +359,7 @@ def renvoyer_otp(payload: dict[str, Any] = Body(...), db: Session = Depends(get_
 
 
 @router.get("/auth/me")
-def me(utilisateur: Utilisateur = Depends(utilisateur_courant)) -> dict[str, str | None]:
+def me(utilisateur: Utilisateur = Depends(utilisateur_courant)) -> dict[str, str | bool | None]:
     """Retourne l'utilisateur courant à partir du token de session (restauration de session)."""
     return utilisateur.public()
 
@@ -266,7 +369,7 @@ def modifier_mon_compte(
     payload: dict[str, Any] = Body(...),
     utilisateur: Utilisateur = Depends(utilisateur_courant),
     db: Session = Depends(get_db),
-) -> dict[str, str | None]:
+) -> dict[str, str | bool | None]:
     """Modification libre-service du compte connecté (nom, email, mot de passe).
 
     Contrairement à ``PATCH /auth/users/{username}`` (réservé aux admins),
@@ -298,6 +401,42 @@ def modifier_mon_compte(
         nom_complet=str(nom_complet).strip() if nom_complet else None,
         mot_de_passe=str(nouveau_mot_de_passe) if nouveau_mot_de_passe else None,
         email=email,
+        # L'utilisateur choisit lui-meme son mot de passe : il n'est plus
+        # provisoire (leve le changement force a la premiere connexion).
+        mot_de_passe_temporaire=False if nouveau_mot_de_passe else None,
+    )
+    assert utilisateur_maj is not None  # le compte courant existe forcement
+    return utilisateur_maj.public()
+
+
+@router.post("/auth/change-initial-password")
+def changer_mot_de_passe_initial(
+    payload: dict[str, Any] = Body(...),
+    utilisateur: Utilisateur = Depends(utilisateur_courant),
+    db: Session = Depends(get_db),
+) -> dict[str, str | bool | None]:
+    """Definit le nouveau mot de passe d'un compte a mot de passe temporaire.
+
+    Contrairement a ``PATCH /auth/me``, ne redemande pas le mot de passe actuel :
+    l'utilisateur vient de prouver le mot de passe temporaire a la connexion et
+    a ete mene directement ici. N'est utilisable que tant que le compte est
+    effectivement en mot de passe temporaire — le flag retombe a False une fois
+    le changement effectue, ce qui reactive le parcours de connexion normal
+    (avec code OTP).
+    """
+    if not utilisateur.mot_de_passe_temporaire:
+        raise HTTPException(status_code=400, detail="Aucun changement de mot de passe requis.")
+    nouveau = str(payload.get("password", ""))
+    if len(nouveau) < 8:
+        raise HTTPException(
+            status_code=400, detail="Le mot de passe doit faire au moins 8 caractères."
+        )
+    utilisateur_maj = modifier_utilisateur(
+        db,
+        organisation_id=utilisateur.organisation_id,
+        username=utilisateur.username,
+        mot_de_passe=nouveau,
+        mot_de_passe_temporaire=False,
     )
     assert utilisateur_maj is not None  # le compte courant existe forcement
     return utilisateur_maj.public()
@@ -374,7 +513,7 @@ def creer_employe(
     payload: dict[str, Any] = Body(...),
     admin: Utilisateur = Depends(utilisateur_admin),
     db: Session = Depends(get_db),
-) -> dict[str, str | None]:
+) -> dict[str, str | bool | None]:
     """Crée un compte employé ("opérateur"), rattaché à l'organisation de l'admin connecté.
 
     Seul l'email est demandé : il sert aussi d'identifiant de connexion
@@ -410,6 +549,9 @@ def creer_employe(
         nom_complet=nom_complet,
         role="operateur",
         email=email,
+        # Le mot de passe fourni par l'admin est provisoire : l'utilisateur
+        # devra le remplacer a sa premiere connexion.
+        mot_de_passe_temporaire=True,
     )
     background_tasks.add_task(envoyer_email_bienvenue, email, nom_complet, mot_de_passe)
     if admin.email:
@@ -427,7 +569,7 @@ def creer_employe(
 @router.get("/auth/users")
 def lister_employes(
     admin: Utilisateur = Depends(utilisateur_admin), db: Session = Depends(get_db)
-) -> list[dict[str, str | None]]:
+) -> list[dict[str, str | bool | None]]:
     """Liste les comptes de l'organisation de l'admin connecté."""
     membres = (
         db.query(Utilisateur)
@@ -448,7 +590,7 @@ def modifier_employe(
     payload: dict[str, Any] = Body(...),
     admin: Utilisateur = Depends(utilisateur_admin),
     db: Session = Depends(get_db),
-) -> dict[str, str | None]:
+) -> dict[str, str | bool | None]:
     """Modifie un compte de l'organisation de l'admin connecté (nom, email, rôle, mot de passe).
 
     Si l'admin change le mot de passe, un email en avertit le titulaire du
@@ -480,6 +622,9 @@ def modifier_employe(
         role=role,
         mot_de_passe=str(mot_de_passe) if mot_de_passe else None,
         email=email,
+        # Un mot de passe reinitialise par l'admin est provisoire : le
+        # titulaire devra le changer a sa prochaine connexion.
+        mot_de_passe_temporaire=True if mot_de_passe else None,
     )
     if utilisateur is None:
         raise HTTPException(status_code=404, detail="Utilisateur introuvable.")
@@ -541,8 +686,11 @@ def se_connecter_en_tant_que(
 
 
 @router.get("/schema")
-def get_schema() -> dict[str, Any]:
+def get_schema(
+    utilisateur: Utilisateur | None = Depends(utilisateur_optionnel),
+) -> dict[str, Any]:
     """Schéma du modèle actif (utilisé par le frontend pour générer le formulaire)."""
+    _activer_contexte_modele(utilisateur)
     try:
         schema = charger_schema_actif()
     except FileNotFoundError as exc:
@@ -563,8 +711,12 @@ def get_schema() -> dict[str, Any]:
 
 
 @router.post("/predict", dependencies=[Depends(verifier_acces)])
-def predict(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+def predict(
+    payload: dict[str, Any] = Body(...),
+    utilisateur: Utilisateur | None = Depends(utilisateur_optionnel),
+) -> dict[str, Any]:
     """Prédit à partir d'un payload dynamique (champs = schéma actif)."""
+    _activer_contexte_modele(utilisateur)
     try:
         schema = charger_schema_actif()
         record = valider_entree(payload, schema)
@@ -578,12 +730,16 @@ def predict(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
 
 
 @router.post("/explain", dependencies=[Depends(verifier_acces)])
-def explain(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+def explain(
+    payload: dict[str, Any] = Body(...),
+    utilisateur: Utilisateur | None = Depends(utilisateur_optionnel),
+) -> dict[str, Any]:
     """Explique une prédiction : contributions SHAP (ou fallback d'ablation).
 
     Accepte le même payload dynamique que ``/predict``. Paramètre optionnel
     ``top_k`` (défaut 5) pour limiter le nombre de facteurs retournés.
     """
+    _activer_contexte_modele(utilisateur)
     try:
         schema = charger_schema_actif()
         data = dict(payload)
@@ -638,11 +794,15 @@ def _generer_recommandations(
 
 
 @router.post("/recommend", dependencies=[Depends(verifier_acces)])
-def recommend(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+def recommend(
+    payload: dict[str, Any] = Body(...),
+    utilisateur: Utilisateur | None = Depends(utilisateur_optionnel),
+) -> dict[str, Any]:
     """Suggère des actions de rétention (Next Best Actions) priorisées pour un client.
 
     Accepte le même payload dynamique de caractéristiques client que ``/predict``.
     """
+    _activer_contexte_modele(utilisateur)
     try:
         schema = charger_schema_actif()
         record = valider_entree(payload, schema)
@@ -672,13 +832,17 @@ def recommend(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
 
 
 @router.post("/recommend/enriched", dependencies=[Depends(verifier_acces)])
-def recommend_enriched(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+def recommend_enriched(
+    payload: dict[str, Any] = Body(...),
+    utilisateur: Utilisateur | None = Depends(utilisateur_optionnel),
+) -> dict[str, Any]:
     """Recommandations **enrichies** : actions de l'IA experte + plan de
     rétention rédigé par le moteur local de redaction.
 
     Seule la génération des actions appelle le LLM (Groq) ; le plan et
     l'email sont ensuite produits localement, sans appel externe.
     """
+    _activer_contexte_modele(utilisateur)
     try:
         schema = charger_schema_actif()
         record = valider_entree(payload, schema)
@@ -732,7 +896,10 @@ def recommend_enriched(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
 
 
 @router.post("/copilot", dependencies=[Depends(verifier_acces)])
-def copilot(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+def copilot(
+    payload: dict[str, Any] = Body(...),
+    identifiants: HTTPAuthorizationCredentials | None = Security(bearer_scheme),
+) -> dict[str, Any]:
     """**Retention Copilot** : traite un client de bout en bout.
 
     Enchaîne predict -> explain -> recommend, décide de l'escalade et renvoie
@@ -740,7 +907,11 @@ def copilot(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     Le payload est le même que ``/predict`` (les caractéristiques du client).
     """
     from app.copilot.agent import traiter_client
+    from app.copilot.tools import definir_token_session
 
+    # Propage le token de session pour que les outils (appels HTTP internes)
+    # servent le modèle personnel de l'utilisateur (isolation par opérateur).
+    definir_token_session(identifiants.credentials if identifiants else None)
     resultat = traiter_client(payload)
     if not resultat.get("ok", False):
         raise HTTPException(status_code=400, detail=resultat.get("erreur", "Erreur copilot."))
@@ -748,7 +919,10 @@ def copilot(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
 
 
 @router.post("/copilot/chat", dependencies=[Depends(verifier_acces)])
-def copilot_chat(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+def copilot_chat(
+    payload: dict[str, Any] = Body(...),
+    identifiants: HTTPAuthorizationCredentials | None = Security(bearer_scheme),
+) -> dict[str, Any]:
     """Assistant conversationnel du copilot : chat en langage naturel + tool-calling.
 
     Payload : ``{"messages": [{"role","content"}], "client": {...}}``.
@@ -756,7 +930,11 @@ def copilot_chat(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     rédige une réponse. ``client`` (optionnel) fournit le client courant en contexte.
     """
     from app.copilot.chat import discuter
+    from app.copilot.tools import definir_token_session
 
+    # Propage le token de session pour que les outils servent le modèle
+    # personnel de l'utilisateur (isolation par opérateur).
+    definir_token_session(identifiants.credentials if identifiants else None)
     messages = payload.get("messages", [])
     client = payload.get("client")
     if not isinstance(messages, list) or not messages:
@@ -765,7 +943,10 @@ def copilot_chat(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
 
 
 @router.post("/what-if", dependencies=[Depends(verifier_acces)])
-def what_if(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+def what_if(
+    payload: dict[str, Any] = Body(...),
+    utilisateur: Utilisateur | None = Depends(utilisateur_optionnel),
+) -> dict[str, Any]:
     """Simule le score de risque d'un client suite à des modifications de variables.
 
     Format attendu :
@@ -774,6 +955,7 @@ def what_if(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
       "overrides": { "nom_variable": nouvelle_valeur, ... }
     }
     """
+    _activer_contexte_modele(utilisateur)
     try:
         schema = charger_schema_actif()
         client_data = payload.get("client")
@@ -838,18 +1020,22 @@ def _json_safe(v: Any) -> Any:
     return v
 
 
-def _dataset_du_modele_actif() -> Path:
-    """Retourne le CSV de ``data/`` **compatible avec le modèle actif**.
+def _dataset_du_modele_actif(rep_donnees: Path | None = None) -> Path:
+    """Retourne le CSV de ``rep_donnees`` **compatible avec le modèle actif**.
 
     Le modèle attend des colonnes précises (rôle ``feature`` du schéma
     d'entraînement). On choisit donc le dataset qui les contient toutes, plutôt
     que le simple « dernier fichier uploadé » (qui peut correspondre à un autre
     modèle). À défaut de correspondance, on prend le plus récent.
+
+    ``rep_donnees`` : dossier des datasets (personnel de l'opérateur, ou racine
+    pour admin/clé API). Défaut : la racine ``data/``.
     """
     from app.api.schema_service import charger_schema_actif, features_publiques
 
+    dossier = rep_donnees or settings.data_dir
     csvs = sorted(
-        settings.data_dir.glob("*.csv"),
+        dossier.glob("*.csv"),
         key=lambda p: p.stat().st_mtime, reverse=True,
     )
     if not csvs:
@@ -880,6 +1066,7 @@ def get_clients(
     offset: int = 0,
     risk: str = "all",
     q: str = "",
+    utilisateur: Utilisateur | None = Depends(utilisateur_optionnel),
 ) -> dict[str, Any]:
     """Liste **paginée** des clients du dataset actif, avec leur score de churn.
 
@@ -893,13 +1080,28 @@ def get_clients(
         risk: Filtre par niveau — ``all`` | ``faible`` | ``moyen`` | ``eleve``.
         q: Recherche plein-texte sur les colonnes affichées + l'identifiant.
     """
+    _activer_contexte_modele(utilisateur)
+    # Opérateur sans modèle personnel : état vide (le frontend affiche
+    # l'invitation à importer un dataset), pas une erreur.
+    if not _a_un_modele_actif():
+        return {
+            "empty": True,
+            "dataset": None,
+            "cible": "",
+            "id_col": None,
+            "colonnes": [],
+            "total": 0,
+            "offset": offset,
+            "limit": limit,
+            "clients": [],
+        }
     try:
         from app.processing.features import ajouter_features
         from app.ingestion.schema import detecter_colonnes_id
         import pandas as pd
         import numpy as np
 
-        chemin = _dataset_du_modele_actif()
+        chemin = _dataset_du_modele_actif(repertoire_donnees_pour(utilisateur))
 
         df = charger_dataset(chemin).copy()
         meta = charger_meta()
@@ -974,19 +1176,26 @@ def get_clients(
 
 
 @router.get("/dashboard", dependencies=[Depends(verifier_acces)])
-def get_dashboard() -> dict[str, Any]:
+def get_dashboard(
+    utilisateur: Utilisateur | None = Depends(utilisateur_optionnel),
+) -> dict[str, Any]:
     """Agrégats du tableau de bord, calculés sur le dataset actif scoré.
 
     Générique et dynamique : KPI, répartition par niveau de risque, histogramme
     des scores et top-10 des clients à risque. Se met à jour à chaque changement
     de modèle actif.
     """
+    _activer_contexte_modele(utilisateur)
+    # Opérateur sans modèle personnel : état vide -> le frontend affiche
+    # l'onboarding (« importez un dataset »), jamais une erreur.
+    if not _a_un_modele_actif():
+        return {"empty": True}
     try:
         from app.processing.features import ajouter_features
         from app.ingestion.schema import detecter_colonnes_id
         import numpy as np
 
-        chemin = _dataset_du_modele_actif()
+        chemin = _dataset_du_modele_actif(repertoire_donnees_pour(utilisateur))
         df = charger_dataset(chemin).copy()
         meta = charger_meta()
         cible = meta.get("cible", "")
@@ -1063,18 +1272,25 @@ def get_dashboard() -> dict[str, Any]:
 
 
 @router.get("/clients/high-risk", dependencies=[Depends(verifier_acces)])
-def get_high_risk_clients(limit: int = 10) -> dict[str, Any]:
+def get_high_risk_clients(
+    limit: int = 10,
+    utilisateur: Utilisateur | None = Depends(utilisateur_optionnel),
+) -> dict[str, Any]:
     """Retourne la liste des clients présentant le plus haut risque de churn.
 
     Lit le dataset actif de manière vectorisée et renvoie le top `limit` des clients à haut risque.
     """
+    _activer_contexte_modele(utilisateur)
+    # Opérateur sans modèle personnel : liste vide plutôt qu'une erreur.
+    if not _a_un_modele_actif():
+        return {"empty": True, "dataset": None, "total_clients": 0, "limit": limit, "clients": []}
     try:
         from app.processing.features import ajouter_features
         import pandas as pd
         import numpy as np
 
         # Dataset compatible avec le modèle actif (pas juste le dernier uploadé).
-        chemin = _dataset_du_modele_actif()
+        chemin = _dataset_du_modele_actif(repertoire_donnees_pour(utilisateur))
 
         df = charger_dataset(chemin)
         meta = charger_meta()
@@ -1176,6 +1392,12 @@ def upload(
         auto_train: Optionnel. Si vrai, lance aussi l'entraînement dès l'upload
             (désactivé par défaut). Le suivi se fait via ``GET /train/status``.
     """
+    # Modèle actif de cet utilisateur (pour le drift ci-dessous) + dossier de
+    # données personnel (isolation : le fichier d'un opérateur n'écrase jamais
+    # celui d'un autre, même à nom identique).
+    _activer_contexte_modele(utilisateur)
+    rep_donnees = repertoire_donnees_pour(utilisateur)
+
     nom = file.filename or "dataset.csv"
     ext = "." + nom.rsplit(".", 1)[-1].lower() if "." in nom else ""
     if ext not in EXTENSIONS_OK:
@@ -1184,8 +1406,8 @@ def upload(
             detail=f"Format non supporté ({ext}). Attendu : {sorted(EXTENSIONS_OK)}.",
         )
 
-    settings.data_dir.mkdir(parents=True, exist_ok=True)
-    destination = _ecrire_dataset(settings.data_dir / nom, file.file.read())
+    rep_donnees.mkdir(parents=True, exist_ok=True)
+    destination = _ecrire_dataset(rep_donnees / nom, file.file.read())
     nom = destination.name
 
     try:
@@ -1224,6 +1446,7 @@ def upload(
             destination,
             username=utilisateur.username if utilisateur else None,
             organisation_id=utilisateur.organisation_id if utilisateur else None,
+            dossier_actif=repertoire_actif_pour(utilisateur),
         )
         reponse["entrainement"] = etat["statut"]
 
@@ -1259,20 +1482,21 @@ def train_start(
     """
     from app.api.training_state import lancer_entrainement
 
+    rep_donnees = repertoire_donnees_pour(utilisateur)
     fichier = payload.get("fichier")
     if fichier:
-        chemin = settings.data_dir / fichier
+        chemin = rep_donnees / fichier
         if not chemin.exists():
             raise HTTPException(status_code=404, detail=f"Fichier introuvable : {fichier}")
     else:
         csvs = sorted(
-            settings.data_dir.glob("*.csv"),
+            rep_donnees.glob("*.csv"),
             key=lambda p: p.stat().st_mtime, reverse=True,
         )
         if not csvs:
             raise HTTPException(
                 status_code=400,
-                detail="Aucun dataset dans data/. Uploade un fichier d'abord.",
+                detail="Aucun dataset. Uploade un fichier d'abord.",
             )
         chemin = csvs[0]
 
@@ -1280,6 +1504,7 @@ def train_start(
         chemin,
         username=utilisateur.username if utilisateur else None,
         organisation_id=utilisateur.organisation_id if utilisateur else None,
+        dossier_actif=repertoire_actif_pour(utilisateur),
     )
 
 
@@ -1294,18 +1519,19 @@ def train(
     """
     from app.modeling.train import entrainer_et_selectionner, formater_resultat_entrainement
 
+    rep_donnees = repertoire_donnees_pour(utilisateur)
     fichier = payload.get("fichier")
     if fichier:
-        chemin = settings.data_dir / fichier
+        chemin = rep_donnees / fichier
         if not chemin.exists():
             raise HTTPException(status_code=404, detail=f"Fichier introuvable : {fichier}")
     else:
         csvs = sorted(
-            settings.data_dir.glob("*.csv"),
+            rep_donnees.glob("*.csv"),
             key=lambda p: p.stat().st_mtime, reverse=True,
         )
         if not csvs:
-            raise HTTPException(status_code=400, detail="Aucun dataset dans data/. Uploade un fichier d'abord.")
+            raise HTTPException(status_code=400, detail="Aucun dataset. Uploade un fichier d'abord.")
         chemin = csvs[0]
 
     try:
@@ -1315,12 +1541,12 @@ def train(
             nom_dataset=chemin.name,
             username=utilisateur.username if utilisateur else None,
             organisation_id=utilisateur.organisation_id if utilisateur else None,
+            dossier_actif=repertoire_actif_pour(utilisateur),
         )
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=400, detail=f"Échec de l'entraînement : {exc}") from exc
 
-    charger_modele.cache_clear()
-    charger_meta.cache_clear()
+    vider_caches_modele()
     recommandations_cache.vider()
 
     return formater_resultat_entrainement(res, fichier=chemin.name)
@@ -1409,7 +1635,9 @@ def list_models(
         )
         noms_complets = {m.username: m.nom_complet for m in membres}
 
-    active = version_active()
+    # Version active DE CET UTILISATEUR : un opérateur a son propre modèle actif
+    # (dossier personnel), l'admin/clé API celui de la racine.
+    active = version_active(repertoire_actif_pour(utilisateur))
     modeles: list[dict[str, Any]] = []
     for version in lister_versions():
         meta_path = settings.models_dir / "registry" / version / "meta.json"
@@ -1444,12 +1672,16 @@ def list_models(
 
 
 @router.post("/models/activate", dependencies=[Depends(verifier_acces)])
-def activate_model(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+def activate_model(
+    payload: dict[str, Any] = Body(...),
+    utilisateur: Utilisateur | None = Depends(utilisateur_optionnel),
+) -> dict[str, Any]:
     """Bascule le modele actif vers une version du registre, sans re-entrainer.
 
-    Body : {"version": "<id>"}. Recopie la version choisie en modele actif, puis
-    vide les caches pour que prediction, explication et dashboard basculent
-    immediatement (sans redemarrer l'API).
+    Body : {"version": "<id>"}. Un operateur bascule uniquement SON modele actif
+    (dossier personnel) et seulement vers une de ses propres versions ; l'admin/
+    cle API bascule le modele actif global. Vide ensuite les caches pour que
+    prediction, explication et dashboard basculent immediatement.
     """
     from app.modeling.registry import activer_version
 
@@ -1457,15 +1689,26 @@ def activate_model(payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
     if not version:
         raise HTTPException(status_code=422, detail="Champ requis manquant : version.")
 
+    # Un opérateur ne peut activer qu'une version qui lui appartient (jamais
+    # celle d'un autre) : on vérifie via les métadonnées du registre partagé.
+    meta_path = settings.models_dir / "registry" / version / "meta.json"
+    if not meta_path.exists():
+        raise HTTPException(status_code=404, detail="Modèle introuvable.")
     try:
-        meta = activer_version(version)
+        meta_registre = json.loads(meta_path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=f"Métadonnées illisibles : {exc}") from exc
+    if not _modele_visible(meta_registre, utilisateur):
+        raise HTTPException(status_code=404, detail="Modèle introuvable.")
+
+    try:
+        meta = activer_version(version, dossier_actif=repertoire_actif_pour(utilisateur))
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=400, detail=f"Echec du changement de modele : {exc}") from exc
 
-    charger_modele.cache_clear()
-    charger_meta.cache_clear()
+    vider_caches_modele()
     recommandations_cache.vider()
 
     return {

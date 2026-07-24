@@ -6,11 +6,15 @@ import {
   Loader2,
   Search,
   SlidersHorizontal,
+  UploadCloud,
+  Users,
 } from 'lucide-react'
+import Link from 'next/link'
 import { useCallback, useEffect, useState } from 'react'
 import { RiskBadge } from '@/components/risk-badge'
-import { Button } from '@/components/ui/button'
+import { Button, buttonVariants } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { cn } from '@/lib/utils'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -41,6 +45,9 @@ interface ClientRow {
 }
 
 interface ClientsResponse {
+  // Vrai quand l'utilisateur n'a pas encore de dataset : on affiche l'invitation
+  // à importer plutôt que le tableau.
+  empty?: boolean
   dataset: string
   cible: string
   id_col: string | null
@@ -155,6 +162,7 @@ export default function ClientsPage() {
   const total = data?.total ?? 0
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE))
   const colonnes = data?.colonnes ?? []
+  const estVide = !loading && !error && !!data?.empty
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
@@ -163,7 +171,7 @@ export default function ClientsPage() {
           <h1 className="text-2xl font-semibold tracking-tight">Clients</h1>
           <p className="mt-1 text-muted-foreground">
             Chaque ligne de votre dataset, avec son score de churn prédit.
-            {data && (
+            {data && !data.empty && (
               <>
                 {' '}
                 <span className="text-foreground">
@@ -174,7 +182,7 @@ export default function ClientsPage() {
             )}
           </p>
         </div>
-        <Button variant="outline" onClick={exporter} disabled={!data || exporting}>
+        <Button variant="outline" onClick={exporter} disabled={!data || exporting || estVide}>
           {exporting ? (
             <Loader2 className="size-4 animate-spin" />
           ) : (
@@ -184,6 +192,27 @@ export default function ClientsPage() {
         </Button>
       </div>
 
+      {estVide ? (
+        <Card>
+          <CardContent className="flex flex-col items-center gap-4 py-16 text-center">
+            <span className="flex size-14 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+              <Users className="size-7" />
+            </span>
+            <div>
+              <h2 className="text-lg font-semibold">Aucun client pour l&apos;instant</h2>
+              <p className="mx-auto mt-1 max-w-sm text-sm text-muted-foreground">
+                Importez un dataset et lancez un entraînement : vos clients et leurs scores de
+                churn apparaîtront ici.
+              </p>
+            </div>
+            <Link href="/upload" className={cn(buttonVariants(), 'gap-2')}>
+              <UploadCloud className="size-4" />
+              Importer un dataset
+            </Link>
+          </CardContent>
+        </Card>
+      ) : (
+        <>
       <Card className="mb-6">
         <CardHeader className="flex-row items-center gap-2">
           <SlidersHorizontal className="size-4 text-muted-foreground" />
@@ -315,6 +344,8 @@ export default function ClientsPage() {
             </Button>
           </div>
         </div>
+      )}
+        </>
       )}
     </div>
   )

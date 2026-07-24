@@ -79,7 +79,7 @@ export function gabaritBienvenue(params: {
       <tr>
         <td style="padding:14px 18px;">
           <p style="margin:0;font-size:13px;line-height:1.5;color:#92400e;">
-            Pour votre sécurité, changez ce mot de passe dès votre première connexion.
+            Ce mot de passe est <strong>temporaire</strong> : dès votre première connexion, vous serez automatiquement invité à en choisir un nouveau.
           </p>
         </td>
       </tr>
@@ -88,14 +88,14 @@ export function gabaritBienvenue(params: {
       <tr>
         <td style="border-radius:8px;background-color:${COULEUR_PRIMAIRE};">
           <a href="${APP_URL}/login" style="display:inline-block;padding:12px 24px;font-size:14px;font-weight:600;color:#ffffff;text-decoration:none;">
-            Se connecter
+            Se connecter et choisir mon mot de passe
           </a>
         </td>
       </tr>
     </table>
     `,
   )
-  const texte = `Bienvenue ${nomComplet},\n\nVotre compte ChurnGuard a été créé.\nEmail : ${email}\nMot de passe temporaire : ${motDePasse}\n\nChangez ce mot de passe dès votre première connexion.\nConnexion : ${APP_URL}/login`
+  const texte = `Bienvenue ${nomComplet},\n\nVotre compte ChurnGuard a été créé.\nEmail : ${email}\nMot de passe temporaire : ${motDePasse}\n\nCe mot de passe est temporaire : dès votre première connexion, vous serez automatiquement invité à en choisir un nouveau.\nConnexion : ${APP_URL}/login`
   return { sujet, html, texte }
 }
 
